@@ -1,0 +1,3149 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RE Portfolio Dashboard</title>
+
+<!--
+=============================================================
+SUPABASE SCHEMA — Run this entire block in your Supabase SQL Editor
+=============================================================
+
+-- 1. PROFILES TABLE (linked to auth.users)
+CREATE TABLE profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'pending' CHECK (role IN ('admin','professor','student','pending')),
+  invite_code_used TEXT,
+  theme TEXT DEFAULT 'light',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  last_active TIMESTAMPTZ DEFAULT NOW(),
+  is_active BOOLEAN DEFAULT TRUE
+);
+
+-- 2. CONFIG TABLE (single row for app settings)
+CREATE TABLE config (
+  id INT PRIMARY KEY DEFAULT 1,
+  invite_code TEXT NOT NULL DEFAULT 'RECLASS2024',
+  CHECK (id = 1)
+);
+INSERT INTO config (id, invite_code) VALUES (1, 'RECLASS2024') ON CONFLICT DO NOTHING;
+
+-- 3. PROJECTS TABLE
+CREATE TABLE projects (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  address TEXT,
+  purchase_price NUMERIC,
+  project_type TEXT NOT NULL CHECK (project_type IN ('acquisition','development','value_add','home_build')),
+  current_phase TEXT,
+  phase_index INT DEFAULT 0,
+  notes TEXT,
+  overall_progress INT DEFAULT 0,
+  status TEXT DEFAULT 'active' CHECK (status IN ('active','archived','closed')),
+  created_by UUID REFERENCES profiles(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4. PROJECT MEMBERS (many-to-many: projects <-> profiles)
+CREATE TABLE project_members (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  assigned_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(project_id, user_id)
+);
+
+-- 5. CHECKLIST ITEMS
+CREATE TABLE checklist_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  item_text TEXT NOT NULL,
+  is_checked BOOLEAN DEFAULT FALSE,
+  assignee_id UUID REFERENCES profiles(id),
+  due_date DATE,
+  checked_by UUID REFERENCES profiles(id),
+  checked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 6. TASKS
+CREATE TABLE tasks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  assignee_id UUID REFERENCES profiles(id),
+  due_date DATE,
+  priority TEXT DEFAULT 'medium' CHECK (priority IN ('low','medium','high')),
+  status TEXT DEFAULT 'not_started' CHECK (status IN ('not_started','in_progress','done')),
+  phase TEXT,
+  auto_generated BOOLEAN DEFAULT FALSE,
+  created_by UUID REFERENCES profiles(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 7. MARKET ANALYSIS
+CREATE TABLE market_analysis (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE UNIQUE,
+  submarket_vacancy_rate NUMERIC,
+  absorption_rate NUMERIC,
+  new_supply_notes TEXT,
+  demand_drivers TEXT,
+  exit_cap_rate NUMERIC,
+  competitor_reno_notes TEXT,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 8. RENT COMPS
+CREATE TABLE rent_comps (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  address TEXT,
+  bed_bath TEXT,
+  asking_rent NUMERIC,
+  effective_rent NUMERIC,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 9. COST ESTIMATES
+CREATE TABLE cost_estimates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE UNIQUE,
+  hard_costs NUMERIC DEFAULT 0,
+  soft_costs NUMERIC DEFAULT 0,
+  capex NUMERIC DEFAULT 0,
+  contingency NUMERIC DEFAULT 0,
+  financing_costs NUMERIC DEFAULT 0,
+  notes TEXT,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 10. DOCUMENTS
+CREATE TABLE documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  file_path TEXT,
+  file_type TEXT,
+  file_size INT,
+  status TEXT DEFAULT 'draft' CHECK (status IN ('draft','pending_signature','signed','sent')),
+  uploaded_by UUID REFERENCES profiles(id),
+  sent_to TEXT,
+  sent_at TIMESTAMPTZ,
+  approved_by UUID REFERENCES profiles(id),
+  approved_at TIMESTAMPTZ,
+  rejection_reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 11. ACCOUNTING LINE ITEMS
+CREATE TABLE accounting_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  category TEXT NOT NULL,
+  line_item TEXT NOT NULL,
+  budgeted NUMERIC DEFAULT 0,
+  actual NUMERIC DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 12. INVOICES
+CREATE TABLE invoices (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  vendor TEXT NOT NULL,
+  amount NUMERIC DEFAULT 0,
+  invoice_date DATE,
+  is_paid BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 13. DRAW SCHEDULE
+CREATE TABLE draw_schedule (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  draw_number INT,
+  amount NUMERIC DEFAULT 0,
+  submitted_date DATE,
+  approved_date DATE,
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending','approved','disbursed')),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 14. CONTRACTOR COMMS
+CREATE TABLE contractor_comms (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  scope_of_work TEXT,
+  sent_at TIMESTAMPTZ DEFAULT NOW(),
+  sent_by UUID REFERENCES profiles(id)
+);
+
+-- 15. CONTRACTOR RESPONSES
+CREATE TABLE contractor_responses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  contractor_name TEXT NOT NULL,
+  response_date DATE,
+  quoted_price NUMERIC,
+  proposed_schedule TEXT,
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 16. WORK ORDERS
+CREATE TABLE work_orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  contractor_response_id UUID REFERENCES contractor_responses(id),
+  title TEXT,
+  status TEXT DEFAULT 'draft' CHECK (status IN ('draft','approved','in_progress','complete')),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 17. APPROVALS
+CREATE TABLE approvals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  document_name TEXT NOT NULL,
+  document_id UUID REFERENCES documents(id),
+  submitted_by UUID REFERENCES profiles(id),
+  submitted_at TIMESTAMPTZ DEFAULT NOW(),
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  actioned_by UUID REFERENCES profiles(id),
+  actioned_at TIMESTAMPTZ,
+  notes TEXT
+);
+
+-- 18. ACTIVITY LOG
+CREATE TABLE activity_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES profiles(id),
+  user_name TEXT,
+  user_role TEXT,
+  action TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 19. CUSTOM FIELDS
+CREATE TABLE custom_fields (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  field_name TEXT NOT NULL,
+  field_type TEXT DEFAULT 'text',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 20. CUSTOM FIELD VALUES
+CREATE TABLE custom_field_values (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  field_id UUID REFERENCES custom_fields(id) ON DELETE CASCADE,
+  value TEXT,
+  UNIQUE(project_id, field_id)
+);
+
+-- 21. PHASE CONFIGS (editable by admin)
+CREATE TABLE phase_configs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_type TEXT NOT NULL,
+  phases TEXT[] NOT NULL
+);
+INSERT INTO phase_configs (project_type, phases) VALUES
+  ('acquisition', ARRAY['Intake','Due Diligence','Underwriting','Market Analysis','IC Approval','Close','Asset Management']),
+  ('development', ARRAY['Intake','Feasibility','Pro Forma & Budget','Market Analysis','Financing & IC Approval','Permits','Construction & Draws','Schedule Tracking']),
+  ('value_add', ARRAY['Intake','Property Assessment','Reno Budget','Market Analysis','IC Approval','Renovation Execution','Rent & Lease-Up']),
+  ('home_build', ARRAY['Intake','Site Analysis','Build Budget','Market Analysis','Permits & Financing','Build Execution','CO & Close'])
+ON CONFLICT DO NOTHING;
+
+-- 22. COMMENTS
+CREATE TABLE comments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES profiles(id),
+  user_name TEXT,
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ========================================================
+-- ENABLE ROW LEVEL SECURITY
+-- ========================================================
+
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE checklist_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE market_analysis ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rent_comps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cost_estimates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE accounting_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE draw_schedule ENABLE ROW LEVEL SECURITY;
+ALTER TABLE contractor_comms ENABLE ROW LEVEL SECURITY;
+ALTER TABLE contractor_responses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE work_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE approvals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE activity_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE custom_fields ENABLE ROW LEVEL SECURITY;
+ALTER TABLE custom_field_values ENABLE ROW LEVEL SECURITY;
+ALTER TABLE phase_configs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rent_comps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE draw_schedule ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+
+-- ========================================================
+-- HELPER FUNCTION: get current user role
+-- ========================================================
+CREATE OR REPLACE FUNCTION get_my_role()
+RETURNS TEXT AS $$
+  SELECT role FROM profiles WHERE id = auth.uid();
+$$ LANGUAGE sql SECURITY DEFINER STABLE;
+
+-- ========================================================
+-- ROW LEVEL SECURITY POLICIES
+-- ========================================================
+
+-- PROFILES: users see their own, admin sees all, professor sees all
+CREATE POLICY "profiles_select" ON profiles FOR SELECT USING (
+  id = auth.uid() OR get_my_role() IN ('admin','professor')
+);
+CREATE POLICY "profiles_insert" ON profiles FOR INSERT WITH CHECK (id = auth.uid());
+CREATE POLICY "profiles_update" ON profiles FOR UPDATE USING (
+  id = auth.uid() OR get_my_role() = 'admin'
+);
+CREATE POLICY "profiles_delete" ON profiles FOR DELETE USING (get_my_role() = 'admin');
+
+-- CONFIG: everyone can read (to validate invite code), only admin updates
+CREATE POLICY "config_select" ON config FOR SELECT USING (true);
+CREATE POLICY "config_update" ON config FOR UPDATE USING (get_my_role() = 'admin');
+
+-- PROJECTS: admin/professor see all; students see only assigned projects
+CREATE POLICY "projects_select" ON projects FOR SELECT USING (
+  get_my_role() IN ('admin','professor')
+  OR created_by = auth.uid()
+  OR id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+);
+CREATE POLICY "projects_insert" ON projects FOR INSERT WITH CHECK (
+  get_my_role() IN ('admin','professor','student')
+);
+CREATE POLICY "projects_update" ON projects FOR UPDATE USING (
+  get_my_role() IN ('admin','professor')
+  OR created_by = auth.uid()
+  OR id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+);
+CREATE POLICY "projects_delete" ON projects FOR DELETE USING (get_my_role() = 'admin');
+
+-- PROJECT_MEMBERS: admin/professor see all; students see their own memberships
+CREATE POLICY "members_select" ON project_members FOR SELECT USING (
+  get_my_role() IN ('admin','professor') OR user_id = auth.uid()
+);
+CREATE POLICY "members_insert" ON project_members FOR INSERT WITH CHECK (
+  get_my_role() IN ('admin','professor','student')
+);
+CREATE POLICY "members_delete" ON project_members FOR DELETE USING (get_my_role() = 'admin');
+
+-- CHECKLIST ITEMS
+CREATE POLICY "checklist_select" ON checklist_items FOR SELECT USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "checklist_insert" ON checklist_items FOR INSERT WITH CHECK (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "checklist_update" ON checklist_items FOR UPDATE USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "checklist_delete" ON checklist_items FOR DELETE USING (get_my_role() = 'admin');
+
+-- TASKS
+CREATE POLICY "tasks_select" ON tasks FOR SELECT USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "tasks_insert" ON tasks FOR INSERT WITH CHECK (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "tasks_update" ON tasks FOR UPDATE USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "tasks_delete" ON tasks FOR DELETE USING (get_my_role() IN ('admin','professor'));
+
+-- MARKET ANALYSIS, RENT COMPS, COST ESTIMATES (same pattern as tasks)
+CREATE POLICY "ma_select" ON market_analysis FOR SELECT USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "ma_insert" ON market_analysis FOR INSERT WITH CHECK (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "ma_update" ON market_analysis FOR UPDATE USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+
+CREATE POLICY "rc_select" ON rent_comps FOR SELECT USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "rc_all" ON rent_comps FOR ALL USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+
+CREATE POLICY "ce_select" ON cost_estimates FOR SELECT USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "ce_all" ON cost_estimates FOR ALL USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+
+-- DOCUMENTS
+CREATE POLICY "docs_select" ON documents FOR SELECT USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "docs_insert" ON documents FOR INSERT WITH CHECK (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "docs_update" ON documents FOR UPDATE USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "docs_delete" ON documents FOR DELETE USING (get_my_role() = 'admin');
+
+-- ACCOUNTING, INVOICES, DRAWS
+CREATE POLICY "acct_all" ON accounting_items FOR ALL USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "inv_all" ON invoices FOR ALL USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "draw_all" ON draw_schedule FOR ALL USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+
+-- CONTRACTOR COMMS, RESPONSES, WORK ORDERS
+CREATE POLICY "cc_all" ON contractor_comms FOR ALL USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "cr_all" ON contractor_responses FOR ALL USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uuid())
+);
+CREATE POLICY "wo_all" ON work_orders FOR ALL USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+
+-- APPROVALS
+CREATE POLICY "appr_all" ON approvals FOR ALL USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+
+-- ACTIVITY LOG
+CREATE POLICY "log_select" ON activity_log FOR SELECT USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+CREATE POLICY "log_insert" ON activity_log FOR INSERT WITH CHECK (true);
+
+-- CUSTOM FIELDS
+CREATE POLICY "cf_select" ON custom_fields FOR SELECT USING (true);
+CREATE POLICY "cf_admin" ON custom_fields FOR ALL USING (get_my_role() = 'admin');
+CREATE POLICY "cfv_all" ON custom_field_values FOR ALL USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+
+-- PHASE CONFIGS
+CREATE POLICY "pc_select" ON phase_configs FOR SELECT USING (true);
+CREATE POLICY "pc_admin" ON phase_configs FOR ALL USING (get_my_role() = 'admin');
+
+-- COMMENTS
+CREATE POLICY "comments_all" ON comments FOR ALL USING (
+  get_my_role() IN ('admin','professor')
+  OR project_id IN (SELECT project_id FROM project_members WHERE user_id = auth.uid())
+  OR project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())
+);
+
+-- ========================================================
+-- STORAGE BUCKET (run separately in Supabase Storage UI or SQL)
+-- ========================================================
+-- In Supabase Dashboard > Storage, create a bucket named "project-documents"
+-- Set it to private. Then add this policy:
+-- INSERT INTO storage.policies (bucket_id, name, definition)
+-- VALUES ('project-documents', 'Authenticated users can upload', '{"operation":"INSERT","check":"(auth.role() = ''authenticated'')"}');
+
+-- ========================================================
+-- TRIGGER: update profiles.last_active on any auth action
+-- ========================================================
+CREATE OR REPLACE FUNCTION update_last_active()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE profiles SET last_active = NOW() WHERE id = NEW.id;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- ========================================================
+-- END OF SCHEMA
+-- NEXT STEPS:
+-- 1. Copy/paste all SQL above into Supabase SQL Editor and run it
+-- 2. In Supabase Storage, create bucket named "project-documents"
+-- 3. Fill in SUPABASE_URL and SUPABASE_ANON_KEY below
+-- 4. Push index.html to GitHub, connect to Render as static site
+-- =============================================================
+-->
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+<style>
+/* ═══════════════════════════════════════════
+   CSS VARIABLES & BASE
+═══════════════════════════════════════════ */
+:root {
+  --c-acq: #378ADD;
+  --c-dev: #1D9E75;
+  --c-val: #7F77DD;
+  --c-hom: #D85A30;
+
+  --bg: #F7F7F5;
+  --bg2: #FFFFFF;
+  --bg3: #F0F0ED;
+  --border: rgba(0,0,0,0.08);
+  --text: #111111;
+  --text2: #555555;
+  --text3: #999999;
+  --accent: #111111;
+  --shadow: 0 1px 3px rgba(0,0,0,0.06);
+  --radius: 6px;
+  --topbar: 56px;
+}
+[data-theme="dark"] {
+  --bg: #111111;
+  --bg2: #1A1A1A;
+  --bg3: #222222;
+  --border: rgba(255,255,255,0.08);
+  --text: #F0F0ED;
+  --text2: #AAAAAA;
+  --text3: #666666;
+  --accent: #F0F0ED;
+  --shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body {
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  transition: background 0.2s, color 0.2s;
+}
+button { cursor: pointer; border: none; background: none; font-family: inherit; font-size: inherit; color: inherit; }
+input, textarea, select {
+  font-family: inherit; font-size: inherit;
+  background: var(--bg3); color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+input:focus, textarea:focus, select:focus { border-color: var(--text); }
+a { color: inherit; text-decoration: none; }
+.mono { font-family: 'DM Mono', monospace; }
+
+/* ═══════════════════════════════════════════
+   SCREENS
+═══════════════════════════════════════════ */
+.screen { display: none; min-height: 100vh; }
+.screen.active { display: block; }
+
+/* ═══════════════════════════════════════════
+   AUTH SCREENS
+═══════════════════════════════════════════ */
+.auth-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 40px;
+}
+.auth-logo {
+  font-family: 'DM Mono', monospace;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text3);
+  margin-bottom: 32px;
+}
+.auth-title { font-size: 22px; font-weight: 600; margin-bottom: 6px; }
+.auth-sub { color: var(--text2); font-size: 13px; margin-bottom: 28px; }
+.form-group { margin-bottom: 14px; }
+.form-label { font-size: 12px; font-weight: 500; color: var(--text2); display: block; margin-bottom: 5px; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 9px 16px; border-radius: var(--radius);
+  font-weight: 500; font-size: 13px; transition: opacity 0.15s, transform 0.1s;
+  cursor: pointer;
+}
+.btn:active { transform: scale(0.98); }
+.btn-primary { background: var(--text); color: var(--bg); }
+.btn-primary:hover { opacity: 0.85; }
+.btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn-ghost:hover { background: var(--bg3); }
+.btn-danger { background: #E53E3E; color: white; }
+.btn-danger:hover { opacity: 0.85; }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn-full { width: 100%; }
+.auth-link { text-align: center; margin-top: 20px; font-size: 13px; color: var(--text2); }
+.auth-link span { color: var(--text); font-weight: 500; cursor: pointer; }
+.auth-link span:hover { text-decoration: underline; }
+.error-msg { background: #FFF5F5; border: 1px solid #FEB2B2; color: #C53030; padding: 10px 12px; border-radius: var(--radius); font-size: 13px; margin-bottom: 14px; display: none; }
+[data-theme="dark"] .error-msg { background: #3D1010; border-color: #7B2020; color: #FCA5A5; }
+
+/* ═══════════════════════════════════════════
+   PENDING SCREEN
+═══════════════════════════════════════════ */
+.pending-wrap {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.pending-card {
+  text-align: center; max-width: 380px;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 48px 40px;
+}
+.pending-icon { font-size: 40px; margin-bottom: 20px; }
+.pending-title { font-size: 20px; font-weight: 600; margin-bottom: 10px; }
+.pending-sub { color: var(--text2); font-size: 14px; line-height: 1.6; margin-bottom: 24px; }
+
+/* ═══════════════════════════════════════════
+   TOP BAR
+═══════════════════════════════════════════ */
+#topbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  height: var(--topbar);
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 20px; gap: 12px;
+}
+.topbar-logo {
+  font-family: 'DM Mono', monospace; font-size: 12px;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--text3);
+  white-space: nowrap;
+}
+.topbar-spacer { flex: 1; }
+.topbar-nav { display: flex; align-items: center; gap: 4px; }
+.topbar-btn {
+  padding: 5px 12px; border-radius: 4px; font-size: 13px; font-weight: 500;
+  color: var(--text2); transition: background 0.15s, color 0.15s;
+}
+.topbar-btn:hover, .topbar-btn.active { background: var(--bg3); color: var(--text); }
+.topbar-user {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 12px; border-radius: 20px;
+  border: 1px solid var(--border); font-size: 13px;
+}
+.role-badge {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
+  padding: 2px 6px; border-radius: 10px; text-transform: uppercase;
+}
+.role-admin { background: #111; color: #fff; }
+[data-theme="dark"] .role-admin { background: #fff; color: #111; }
+.role-professor { background: #EDF2FF; color: #3730A3; }
+[data-theme="dark"] .role-professor { background: #1e1b4b; color: #a5b4fc; }
+.role-student { background: #F0FDF4; color: #166534; }
+[data-theme="dark"] .role-student { background: #052e16; color: #86efac; }
+.role-pending { background: #FFF7ED; color: #92400E; }
+[data-theme="dark"] .role-pending { background: #2d1a05; color: #fcd34d; }
+
+.icon-btn {
+  width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+  color: var(--text2); transition: background 0.15s, color 0.15s;
+}
+.icon-btn:hover { background: var(--bg3); color: var(--text); }
+
+/* ═══════════════════════════════════════════
+   MAIN CONTENT AREA
+═══════════════════════════════════════════ */
+#main-content {
+  padding-top: var(--topbar);
+  padding-bottom: 80px;
+  min-height: 100vh;
+}
+
+/* ═══════════════════════════════════════════
+   STATS BAR
+═══════════════════════════════════════════ */
+.stats-bar {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 1px; background: var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.stat-cell {
+  background: var(--bg2); padding: 16px 20px;
+}
+.stat-label { font-size: 11px; color: var(--text3); font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+.stat-value { font-size: 24px; font-weight: 600; font-family: 'DM Mono', monospace; }
+
+/* ═══════════════════════════════════════════
+   FILTER TABS
+═══════════════════════════════════════════ */
+.filter-bar {
+  padding: 16px 20px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); background: var(--bg2);
+}
+.filter-tab {
+  padding: 5px 14px; border-radius: 20px; font-size: 13px; font-weight: 500;
+  color: var(--text2); border: 1px solid transparent; transition: all 0.15s; cursor: pointer;
+}
+.filter-tab:hover { background: var(--bg3); color: var(--text); }
+.filter-tab.active { background: var(--text); color: var(--bg); }
+.filter-tab[data-type="acquisition"].active { background: var(--c-acq); color: white; border-color: var(--c-acq); }
+.filter-tab[data-type="development"].active { background: var(--c-dev); color: white; border-color: var(--c-dev); }
+.filter-tab[data-type="value_add"].active { background: var(--c-val); color: white; border-color: var(--c-val); }
+.filter-tab[data-type="home_build"].active { background: var(--c-hom); color: white; border-color: var(--c-hom); }
+.filter-spacer { flex: 1; }
+
+/* ═══════════════════════════════════════════
+   PROJECT GRID
+═══════════════════════════════════════════ */
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px; padding: 20px;
+}
+.project-card {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 20px; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
+  position: relative; overflow: hidden;
+}
+.project-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+}
+.project-card[data-type="acquisition"]::before { background: var(--c-acq); }
+.project-card[data-type="development"]::before { background: var(--c-dev); }
+.project-card[data-type="value_add"]::before { background: var(--c-val); }
+.project-card[data-type="home_build"]::before { background: var(--c-hom); }
+.project-card:hover { border-color: var(--text3); box-shadow: var(--shadow); }
+.card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+.card-title { font-size: 15px; font-weight: 600; line-height: 1.3; }
+.card-address { font-size: 12px; color: var(--text3); margin-top: 2px; }
+.type-badge {
+  font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 10px;
+  letter-spacing: 0.05em; text-transform: uppercase; white-space: nowrap;
+}
+.badge-acquisition { background: #EBF4FF; color: var(--c-acq); }
+.badge-development { background: #E6F7F2; color: var(--c-dev); }
+.badge-value_add { background: #EEE8FF; color: var(--c-val); }
+.badge-home_build { background: #FFF0EB; color: var(--c-hom); }
+[data-theme="dark"] .badge-acquisition { background: #0d2240; }
+[data-theme="dark"] .badge-development { background: #062817; }
+[data-theme="dark"] .badge-value_add { background: #1a1440; }
+[data-theme="dark"] .badge-home_build { background: #2d1205; }
+
+.card-phase { font-size: 12px; color: var(--text2); margin-bottom: 8px; }
+.progress-bar { height: 4px; background: var(--bg3); border-radius: 2px; margin-bottom: 10px; overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+.project-card[data-type="acquisition"] .progress-fill { background: var(--c-acq); }
+.project-card[data-type="development"] .progress-fill { background: var(--c-dev); }
+.project-card[data-type="value_add"] .progress-fill { background: var(--c-val); }
+.project-card[data-type="home_build"] .progress-fill { background: var(--c-hom); }
+
+.phase-pills { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; }
+.phase-pill {
+  font-size: 10px; padding: 2px 7px; border-radius: 10px;
+  font-weight: 500; white-space: nowrap;
+}
+.pill-done { background: var(--bg3); color: var(--text3); text-decoration: line-through; }
+.pill-active { background: var(--text); color: var(--bg); }
+.pill-upcoming { border: 1px solid var(--border); color: var(--text3); }
+
+.card-footer { display: flex; align-items: center; justify-content: space-between; }
+.card-avatars { display: flex; gap: -4px; }
+.avatar {
+  width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; font-size: 10px; font-weight: 600;
+  background: var(--bg3); color: var(--text2); border: 2px solid var(--bg2);
+  margin-right: -6px;
+}
+.card-tasks-due { font-size: 11px; color: #E53E3E; font-weight: 500; }
+.empty-state { padding: 60px 20px; text-align: center; color: var(--text3); }
+.empty-state-icon { font-size: 40px; margin-bottom: 12px; }
+
+/* ═══════════════════════════════════════════
+   PROJECT DETAIL VIEW
+═══════════════════════════════════════════ */
+#view-detail { background: var(--bg); }
+.detail-header {
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  padding: 16px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.back-btn { display: flex; align-items: center; gap: 6px; color: var(--text2); font-size: 13px; cursor: pointer; }
+.back-btn:hover { color: var(--text); }
+.detail-title { font-size: 18px; font-weight: 600; }
+.detail-address { font-size: 13px; color: var(--text2); }
+.detail-meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+.detail-progress-wrap { flex: 1; max-width: 200px; }
+.detail-progress-label { font-size: 11px; color: var(--text3); margin-bottom: 3px; display: flex; justify-content: space-between; }
+
+.module-tabs {
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  display: flex; overflow-x: auto; padding: 0 20px;
+}
+.module-tab {
+  padding: 12px 16px; font-size: 13px; font-weight: 500; color: var(--text2);
+  white-space: nowrap; cursor: pointer; border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+.module-tab:hover { color: var(--text); }
+.module-tab.active { color: var(--text); border-bottom-color: var(--text); }
+
+.module-content { padding: 20px; display: none; }
+.module-content.active { display: block; }
+
+/* ═══════════════════════════════════════════
+   TABLES
+═══════════════════════════════════════════ */
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th {
+  text-align: left; padding: 8px 12px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3);
+  border-bottom: 1px solid var(--border);
+}
+.data-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td { background: var(--bg3); }
+
+/* ═══════════════════════════════════════════
+   CHECKLIST
+═══════════════════════════════════════════ */
+.checklist-item {
+  display: flex; align-items: center; gap: 12px; padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.checklist-item:last-child { border-bottom: none; }
+.check-box {
+  width: 18px; height: 18px; border: 1.5px solid var(--border); border-radius: 4px;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  flex-shrink: 0; transition: all 0.15s;
+}
+.check-box.checked { background: var(--text); border-color: var(--text); }
+.check-box.checked::after { content: '✓'; color: var(--bg); font-size: 11px; font-weight: 700; }
+.checklist-item.checked .checklist-text { text-decoration: line-through; color: var(--text3); }
+.checklist-meta { margin-left: auto; font-size: 11px; color: var(--text3); white-space: nowrap; }
+
+/* ═══════════════════════════════════════════
+   CARDS / PANELS
+═══════════════════════════════════════════ */
+.panel {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin-bottom: 16px;
+}
+.panel-title { font-size: 13px; font-weight: 600; margin-bottom: 16px; color: var(--text); }
+.section-title { font-size: 13px; font-weight: 600; color: var(--text2); margin-bottom: 12px; }
+
+/* ═══════════════════════════════════════════
+   TASK ITEMS
+═══════════════════════════════════════════ */
+.task-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.task-item:last-child { border-bottom: none; }
+.task-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.task-status-not_started { background: var(--text3); }
+.task-status-in_progress { background: #F6AD55; }
+.task-status-done { background: #68D391; }
+.task-title { flex: 1; font-size: 13px; }
+.task-title.done { text-decoration: line-through; color: var(--text3); }
+.priority-badge {
+  font-size: 10px; padding: 2px 6px; border-radius: 3px; font-weight: 600; text-transform: uppercase;
+}
+.priority-high { background: #FFF5F5; color: #C53030; }
+.priority-medium { background: #FFFBEB; color: #92400E; }
+.priority-low { background: #F0FDF4; color: #166534; }
+[data-theme="dark"] .priority-high { background: #3d0000; color: #fc8181; }
+[data-theme="dark"] .priority-medium { background: #2d1a00; color: #fcd34d; }
+[data-theme="dark"] .priority-low { background: #00250a; color: #86efac; }
+
+/* ═══════════════════════════════════════════
+   ACCOUNTING
+═══════════════════════════════════════════ */
+.over-budget td { color: #C53030; }
+[data-theme="dark"] .over-budget td { color: #fc8181; }
+
+/* ═══════════════════════════════════════════
+   MODAL
+═══════════════════════════════════════════ */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.4); display: none; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+  width: 100%; max-width: 540px; max-height: 90vh; overflow-y: auto;
+}
+.modal-header {
+  padding: 20px 24px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.modal-title { font-size: 16px; font-weight: 600; }
+.modal-close { width: 28px; height: 28px; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: var(--text2); }
+.modal-close:hover { background: var(--bg3); color: var(--text); }
+.modal-body { padding: 24px; }
+.modal-footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ═══════════════════════════════════════════
+   DROP ZONE
+═══════════════════════════════════════════ */
+.drop-zone {
+  border: 2px dashed var(--border); border-radius: 8px;
+  padding: 32px; text-align: center; color: var(--text3);
+  font-size: 13px; transition: border-color 0.15s, background 0.15s;
+  cursor: pointer;
+}
+.drop-zone.dragover { border-color: var(--text); background: var(--bg3); }
+.drop-zone-icon { font-size: 28px; margin-bottom: 8px; }
+
+/* ═══════════════════════════════════════════
+   AI BAR
+═══════════════════════════════════════════ */
+#ai-bar {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 90;
+  background: var(--bg2); border-top: 1px solid var(--border);
+  padding: 12px 16px; display: none;
+}
+#ai-bar.visible { display: block; }
+.ai-bar-inner { display: flex; align-items: center; gap: 8px; max-width: 900px; margin: 0 auto; }
+#ai-input {
+  flex: 1; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 20px; padding: 8px 16px; font-size: 13px;
+  resize: none; min-height: 36px; max-height: 80px;
+}
+.ai-mic-btn {
+  width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; border: 1px solid var(--border); color: var(--text2);
+  transition: all 0.15s; flex-shrink: 0;
+}
+.ai-mic-btn:hover { background: var(--bg3); color: var(--text); }
+.ai-mic-btn.listening { background: #E53E3E; border-color: #E53E3E; color: white; animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+.ai-send-btn {
+  width: 36px; height: 36px; border-radius: 50%; background: var(--text);
+  color: var(--bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.ai-send-btn:hover { opacity: 0.8; }
+.ai-bar-label { font-size: 11px; color: var(--text3); text-align: center; margin-top: 4px; }
+
+/* ═══════════════════════════════════════════
+   TOAST
+═══════════════════════════════════════════ */
+#toast-container {
+  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+  z-index: 300; display: flex; flex-direction: column; gap: 8px; align-items: center;
+}
+.toast {
+  background: var(--text); color: var(--bg); padding: 10px 18px;
+  border-radius: 20px; font-size: 13px; font-weight: 500;
+  animation: toastIn 0.2s ease; white-space: nowrap;
+  max-width: 90vw; text-overflow: ellipsis; overflow: hidden;
+}
+.toast.error { background: #E53E3E; color: white; }
+.toast.success { background: #2F855A; color: white; }
+@keyframes toastIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ═══════════════════════════════════════════
+   ADMIN & PROFESSOR VIEWS
+═══════════════════════════════════════════ */
+.view-header {
+  padding: 20px; background: var(--bg2); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+}
+.view-title { font-size: 18px; font-weight: 600; }
+.view-summary {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+  background: var(--border); margin: 0 20px 20px; border-radius: 8px; overflow: hidden;
+}
+.summary-cell { background: var(--bg2); padding: 14px 18px; }
+.summary-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; }
+.summary-value { font-size: 20px; font-weight: 600; font-family: 'DM Mono', monospace; margin-top: 2px; }
+
+.professor-list { padding: 0 20px; }
+.professor-row {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+  margin-bottom: 10px; overflow: hidden;
+}
+.professor-row-header {
+  padding: 14px 16px; display: flex; align-items: center; gap: 12px;
+  cursor: pointer; transition: background 0.15s;
+}
+.professor-row-header:hover { background: var(--bg3); }
+.professor-row-body { display: none; border-top: 1px solid var(--border); }
+.professor-row.expanded .professor-row-body { display: block; }
+.expand-icon { margin-left: auto; color: var(--text3); transition: transform 0.2s; }
+.professor-row.expanded .expand-icon { transform: rotate(180deg); }
+
+/* ═══════════════════════════════════════════
+   ADMIN PANEL
+═══════════════════════════════════════════ */
+.admin-tabs { display: flex; gap: 4px; padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--bg2); }
+.admin-tab { padding: 6px 14px; border-radius: 4px; font-size: 13px; font-weight: 500; color: var(--text2); cursor: pointer; }
+.admin-tab:hover { background: var(--bg3); color: var(--text); }
+.admin-tab.active { background: var(--text); color: var(--bg); }
+.admin-panel-content { padding: 20px; display: none; }
+.admin-panel-content.active { display: block; }
+
+/* ═══════════════════════════════════════════
+   ACTIVITY LOG
+═══════════════════════════════════════════ */
+.log-entry {
+  display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.log-entry:last-child { border-bottom: none; }
+.log-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--bg3); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+.log-body { flex: 1; }
+.log-user { font-weight: 600; }
+.log-action { color: var(--text2); }
+.log-time { font-size: 11px; color: var(--text3); }
+
+/* ═══════════════════════════════════════════
+   FORMS
+═══════════════════════════════════════════ */
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form-section { margin-bottom: 20px; }
+.form-section-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.autofill-preview { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-size: 12px; color: var(--text2); margin-top: 10px; }
+
+/* ═══════════════════════════════════════════
+   DOCUMENT STATUS
+═══════════════════════════════════════════ */
+.doc-status {
+  font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; text-transform: uppercase;
+}
+.doc-status-draft { background: var(--bg3); color: var(--text3); }
+.doc-status-pending_signature { background: #FFFBEB; color: #92400E; }
+.doc-status-signed { background: #F0FDF4; color: #166534; }
+.doc-status-sent { background: #EBF4FF; color: var(--c-acq); }
+
+/* ═══════════════════════════════════════════
+   INLINE EDIT INPUTS
+═══════════════════════════════════════════ */
+.inline-input {
+  border: 1px solid transparent; background: transparent; width: 100%;
+  padding: 4px 6px; border-radius: 4px; transition: border-color 0.15s, background 0.15s;
+}
+.inline-input:hover { border-color: var(--border); background: var(--bg3); }
+.inline-input:focus { border-color: var(--text3); background: var(--bg3); }
+
+/* ═══════════════════════════════════════════
+   LOADING
+═══════════════════════════════════════════ */
+.loading-spinner {
+  width: 20px; height: 20px; border: 2px solid var(--border);
+  border-top-color: var(--text); border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-wrap { display: flex; justify-content: center; padding: 40px; }
+
+/* ═══════════════════════════════════════════
+   RESPONSIVE
+═══════════════════════════════════════════ */
+@media (max-width: 640px) {
+  .stats-bar { grid-template-columns: 1fr 1fr; }
+  .form-row { grid-template-columns: 1fr; }
+  .view-summary { grid-template-columns: 1fr; }
+  .projects-grid { grid-template-columns: 1fr; padding: 12px; }
+  .module-tabs { padding: 0 12px; }
+  .module-content { padding: 12px; }
+  #topbar { padding: 0 12px; }
+  .topbar-logo { display: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════
+     TOP BAR
+═══════════════════════════════════════════ -->
+<nav id="topbar" style="display:none">
+  <span class="topbar-logo mono">RE Portfolio</span>
+  <div class="topbar-nav" id="nav-links">
+    <button class="topbar-btn" onclick="showView('portfolio')" id="nav-portfolio">Portfolio</button>
+    <button class="topbar-btn" id="nav-professor" onclick="showView('professor')" style="display:none">All Projects</button>
+    <button class="topbar-btn" id="nav-admin" onclick="showView('admin')" style="display:none">Admin</button>
+  </div>
+  <div class="topbar-spacer"></div>
+  <div class="topbar-user" id="topbar-user">
+    <span id="topbar-name"></span>
+    <span class="role-badge" id="topbar-role"></span>
+  </div>
+  <button class="icon-btn" id="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+    <span id="theme-icon">☀</span>
+  </button>
+  <button class="btn btn-ghost btn-sm" onclick="logout()">Sign out</button>
+</nav>
+
+<!-- ═══════════════════════════════════════════
+     TOAST CONTAINER
+═══════════════════════════════════════════ -->
+<div id="toast-container"></div>
+
+<!-- ═══════════════════════════════════════════
+     SCREEN: LOGIN
+═══════════════════════════════════════════ -->
+<div id="screen-login" class="screen active">
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="auth-logo mono">RE Portfolio</div>
+      <div class="auth-title">Welcome back</div>
+      <div class="auth-sub">Sign in to your account</div>
+      <div class="error-msg" id="login-error"></div>
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input type="email" id="login-email" placeholder="you@example.com">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input type="password" id="login-password" placeholder="••••••••">
+      </div>
+      <button class="btn btn-primary btn-full" style="margin-top:8px" onclick="doLogin()">Sign in</button>
+      <div class="auth-link">Don't have an account? <span onclick="showScreen('signup')">Sign up</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     SCREEN: SIGNUP
+═══════════════════════════════════════════ -->
+<div id="screen-signup" class="screen">
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="auth-logo mono">RE Portfolio</div>
+      <div class="auth-title">Create an account</div>
+      <div class="auth-sub">You'll need an invite code from your instructor</div>
+      <div class="error-msg" id="signup-error"></div>
+      <div class="form-group">
+        <label class="form-label">Full Name</label>
+        <input type="text" id="signup-name" placeholder="Jane Smith">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input type="email" id="signup-email" placeholder="you@example.com">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input type="password" id="signup-password" placeholder="At least 8 characters">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Class Invite Code</label>
+        <input type="text" id="signup-code" placeholder="Enter code" style="text-transform:uppercase">
+      </div>
+      <button class="btn btn-primary btn-full" style="margin-top:8px" onclick="doSignup()">Create account</button>
+      <div class="auth-link">Already have an account? <span onclick="showScreen('login')">Sign in</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     SCREEN: PENDING
+═══════════════════════════════════════════ -->
+<div id="screen-pending" class="screen">
+  <nav id="topbar-pending" style="position:fixed;top:0;left:0;right:0;z-index:100;height:56px;background:var(--bg2);border-bottom:1px solid var(--border);display:none;align-items:center;padding:0 20px;gap:12px;">
+    <span class="topbar-logo mono">RE Portfolio</span>
+    <div style="flex:1"></div>
+    <div class="topbar-user" id="pending-user-display"></div>
+    <button class="btn btn-ghost btn-sm" onclick="logout()">Sign out</button>
+  </nav>
+  <div class="pending-wrap" style="padding-top:56px">
+    <div class="pending-card">
+      <div class="pending-icon">⏳</div>
+      <div class="pending-title">Account Pending Approval</div>
+      <div class="pending-sub">Your account has been created. Please wait for your instructor to assign you a role before you can access the dashboard.</div>
+      <button class="btn btn-ghost" onclick="logout()">Sign out</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     SCREEN: MAIN APP
+═══════════════════════════════════════════ -->
+<div id="screen-app" class="screen">
+  <div id="main-content">
+
+    <!-- PORTFOLIO VIEW -->
+    <div id="view-portfolio">
+      <div class="stats-bar" id="stats-bar">
+        <div class="stat-cell"><div class="stat-label">Active Projects</div><div class="stat-value" id="stat-projects">—</div></div>
+        <div class="stat-cell"><div class="stat-label">Tasks Due Today</div><div class="stat-value" id="stat-tasks">—</div></div>
+        <div class="stat-cell"><div class="stat-label">Docs Pending Sign-off</div><div class="stat-value" id="stat-docs">—</div></div>
+        <div class="stat-cell"><div class="stat-label">Portfolio Value</div><div class="stat-value" id="stat-value">—</div></div>
+      </div>
+      <div class="filter-bar">
+        <button class="filter-tab active" data-type="all" onclick="filterProjects('all', this)">All</button>
+        <button class="filter-tab" data-type="acquisition" onclick="filterProjects('acquisition', this)">Acquisition</button>
+        <button class="filter-tab" data-type="development" onclick="filterProjects('development', this)">Development</button>
+        <button class="filter-tab" data-type="value_add" onclick="filterProjects('value_add', this)">Value-add</button>
+        <button class="filter-tab" data-type="home_build" onclick="filterProjects('home_build', this)">Home Build</button>
+        <div class="filter-spacer"></div>
+        <button class="btn btn-primary btn-sm" onclick="openNewProjectModal()">+ New Project</button>
+      </div>
+      <div class="projects-grid" id="projects-grid">
+        <div class="loading-wrap"><div class="loading-spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- DETAIL VIEW -->
+    <div id="view-detail" style="display:none">
+      <div class="detail-header">
+        <button class="back-btn" onclick="closeDetail()">← Back</button>
+        <div>
+          <div class="detail-title" id="detail-name"></div>
+          <div class="detail-address" id="detail-address"></div>
+        </div>
+        <div class="detail-meta">
+          <span class="type-badge" id="detail-type-badge"></span>
+          <span id="detail-phase-label" style="font-size:13px;color:var(--text2)"></span>
+          <div class="detail-progress-wrap">
+            <div class="detail-progress-label"><span>Progress</span><span id="detail-pct"></span></div>
+            <div class="progress-bar"><div class="progress-fill" id="detail-progress-fill" style="width:0%"></div></div>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="advance-phase-btn" onclick="advancePhase()">Advance Phase →</button>
+        </div>
+      </div>
+      <div class="module-tabs" id="module-tabs">
+        <div class="module-tab active" data-module="checklist" onclick="switchModule('checklist',this)">Checklist</div>
+        <div class="module-tab" data-module="market" onclick="switchModule('market',this)">Market Analysis</div>
+        <div class="module-tab" data-module="cost" onclick="switchModule('cost',this)">Cost Estimate</div>
+        <div class="module-tab" data-module="documents" onclick="switchModule('documents',this)">Documents</div>
+        <div class="module-tab" data-module="accounting" onclick="switchModule('accounting',this)">Accounting</div>
+        <div class="module-tab" data-module="tasks" onclick="switchModule('tasks',this)">Tasks</div>
+        <div class="module-tab" data-module="contractor" onclick="switchModule('contractor',this)">Contractor</div>
+        <div class="module-tab" data-module="approvals" onclick="switchModule('approvals',this)">Approvals</div>
+        <div class="module-tab" data-module="activity" onclick="switchModule('activity',this)">Activity</div>
+        <div class="module-tab" data-module="comments" onclick="switchModule('comments',this)">Comments</div>
+      </div>
+
+      <!-- MODULE CONTENTS -->
+      <div id="mod-checklist" class="module-content active">
+        <div id="checklist-list"></div>
+      </div>
+      <div id="mod-market" class="module-content">
+        <div class="panel">
+          <div class="panel-title">Rent Comparables</div>
+          <table class="data-table" id="rent-comps-table">
+            <thead><tr><th>Address</th><th>Bed/Bath</th><th>Asking Rent</th><th>Effective Rent</th><th></th></tr></thead>
+            <tbody id="rent-comps-body"></tbody>
+          </table>
+          <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="addRentComp()">+ Add Comp</button>
+        </div>
+        <div class="panel">
+          <div class="panel-title">Market Metrics</div>
+          <div class="form-row">
+            <div class="form-group"><label class="form-label">Submarket Vacancy Rate (%)</label><input type="number" id="ma-vacancy" class="inline-input" onchange="saveMarketAnalysis()"></div>
+            <div class="form-group"><label class="form-label">Absorption Rate</label><input type="number" id="ma-absorption" class="inline-input" onchange="saveMarketAnalysis()"></div>
+            <div class="form-group"><label class="form-label">Exit Cap Rate Assumption (%)</label><input type="number" id="ma-cap-rate" class="inline-input" onchange="saveMarketAnalysis()"></div>
+          </div>
+          <div class="form-group"><label class="form-label">New Supply Pipeline Notes</label><textarea id="ma-supply" rows="2" onchange="saveMarketAnalysis()"></textarea></div>
+          <div class="form-group"><label class="form-label">Demand Drivers</label><textarea id="ma-demand" rows="2" onchange="saveMarketAnalysis()"></textarea></div>
+          <div class="form-group"><label class="form-label">Competitor Renovation Activity</label><textarea id="ma-competitor" rows="2" onchange="saveMarketAnalysis()"></textarea></div>
+        </div>
+      </div>
+      <div id="mod-cost" class="module-content">
+        <div class="panel">
+          <div class="panel-title">Cost Estimate</div>
+          <table class="data-table">
+            <thead><tr><th>Category</th><th style="text-align:right">Amount</th></tr></thead>
+            <tbody>
+              <tr><td>Hard Costs</td><td><input type="number" id="cost-hard" class="inline-input" style="text-align:right" onchange="saveCostEstimate()"></td></tr>
+              <tr><td>Soft Costs</td><td><input type="number" id="cost-soft" class="inline-input" style="text-align:right" onchange="saveCostEstimate()"></td></tr>
+              <tr><td>CapEx</td><td><input type="number" id="cost-capex" class="inline-input" style="text-align:right" onchange="saveCostEstimate()"></td></tr>
+              <tr><td>Contingency</td><td><input type="number" id="cost-contingency" class="inline-input" style="text-align:right" onchange="saveCostEstimate()"></td></tr>
+              <tr><td>Financing Costs</td><td><input type="number" id="cost-financing" class="inline-input" style="text-align:right" onchange="saveCostEstimate()"></td></tr>
+              <tr><td style="font-weight:600">Total</td><td id="cost-total" style="text-align:right;font-weight:600;font-family:'DM Mono',monospace;padding:10px 12px">$0</td></tr>
+            </tbody>
+          </table>
+          <div class="form-group" style="margin-top:12px"><label class="form-label">Notes</label><textarea id="cost-notes" rows="2" onchange="saveCostEstimate()"></textarea></div>
+        </div>
+      </div>
+      <div id="mod-documents" class="module-content">
+        <div class="drop-zone" id="doc-drop-zone" onclick="document.getElementById('doc-file-input').click()" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleDocDrop(event)">
+          <div class="drop-zone-icon">📎</div>
+          <div>Drop files here or click to upload</div>
+          <div style="font-size:11px;margin-top:4px;color:var(--text3)">PDF, Word, Images</div>
+        </div>
+        <input type="file" id="doc-file-input" style="display:none" multiple onchange="handleDocFiles(this.files)">
+        <div style="margin-top:16px" id="doc-list"></div>
+      </div>
+      <div id="mod-accounting" class="module-content">
+        <div class="panel">
+          <div class="panel-title">Budget vs Actual</div>
+          <table class="data-table" id="acct-table">
+            <thead><tr><th>Category</th><th>Line Item</th><th>Budgeted</th><th>Actual</th><th>Variance</th><th></th></tr></thead>
+            <tbody id="acct-body"></tbody>
+          </table>
+          <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="addAccountingItem()">+ Add Line Item</button>
+        </div>
+        <div class="panel">
+          <div class="panel-title">Invoices</div>
+          <table class="data-table">
+            <thead><tr><th>Vendor</th><th>Amount</th><th>Date</th><th>Status</th><th></th></tr></thead>
+            <tbody id="invoice-body"></tbody>
+          </table>
+          <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="addInvoice()">+ Add Invoice</button>
+        </div>
+        <div class="panel" id="draw-panel">
+          <div class="panel-title">Draw Schedule</div>
+          <table class="data-table">
+            <thead><tr><th>#</th><th>Amount</th><th>Submitted</th><th>Approved</th><th>Status</th><th></th></tr></thead>
+            <tbody id="draw-body"></tbody>
+          </table>
+          <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="addDraw()">+ Add Draw</button>
+        </div>
+      </div>
+      <div id="mod-tasks" class="module-content">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+          <select id="task-filter-assignee" onchange="renderTasks()" style="width:auto;font-size:13px"><option value="">All Assignees</option></select>
+          <select id="task-filter-status" onchange="renderTasks()" style="width:auto;font-size:13px">
+            <option value="">All Statuses</option>
+            <option value="not_started">Not Started</option>
+            <option value="in_progress">In Progress</option>
+            <option value="done">Done</option>
+          </select>
+          <div style="flex:1"></div>
+          <button class="btn btn-primary btn-sm" onclick="openAddTaskModal()">+ Add Task</button>
+        </div>
+        <div id="task-list"></div>
+      </div>
+      <div id="mod-contractor" class="module-content">
+        <div class="panel">
+          <div class="panel-title">Scope of Work</div>
+          <textarea id="scope-text" rows="5" placeholder="Write scope of work here..."></textarea>
+          <button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="sendScopeOfWork()">Send Scope of Work</button>
+        </div>
+        <div class="panel">
+          <div class="panel-title">Contractor Responses</div>
+          <div id="contractor-responses"></div>
+          <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="addContractorResponse()">+ Add Response</button>
+        </div>
+        <div class="panel">
+          <div class="panel-title">Work Orders</div>
+          <div id="work-orders-list"></div>
+        </div>
+      </div>
+      <div id="mod-approvals" class="module-content">
+        <div id="approvals-list"></div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="addApprovalItem()">+ Request Approval</button>
+      </div>
+      <div id="mod-activity" class="module-content">
+        <div id="activity-list"></div>
+      </div>
+      <div id="mod-comments" class="module-content">
+        <div id="comments-list" style="margin-bottom:16px"></div>
+        <div style="display:flex;gap:8px">
+          <textarea id="new-comment" rows="2" placeholder="Leave a comment..." style="flex:1"></textarea>
+          <button class="btn btn-primary btn-sm" onclick="addComment()" style="height:fit-content;margin-top:auto">Post</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PROFESSOR VIEW -->
+    <div id="view-professor" style="display:none">
+      <div class="view-header">
+        <div class="view-title">All Projects — Professor View</div>
+      </div>
+      <div class="view-summary">
+        <div class="summary-cell"><div class="summary-label">Total Projects</div><div class="summary-value" id="prof-total">—</div></div>
+        <div class="summary-cell"><div class="summary-label">Avg Completion</div><div class="summary-value" id="prof-avg">—</div></div>
+        <div class="summary-cell"><div class="summary-label">Overdue Tasks</div><div class="summary-value" id="prof-overdue">—</div></div>
+      </div>
+      <div class="professor-list" id="professor-list"></div>
+    </div>
+
+    <!-- ADMIN VIEW -->
+    <div id="view-admin" style="display:none">
+      <div class="view-header">
+        <div class="view-title">Admin Panel</div>
+      </div>
+      <div class="admin-tabs">
+        <button class="admin-tab active" onclick="switchAdminTab('users',this)">Users</button>
+        <button class="admin-tab" onclick="switchAdminTab('invite',this)">Invite Code</button>
+        <button class="admin-tab" onclick="switchAdminTab('phases',this)">Phase Config</button>
+        <button class="admin-tab" onclick="switchAdminTab('custom-fields',this)">Custom Fields</button>
+        <button class="admin-tab" onclick="switchAdminTab('all-activity',this)">Activity Logs</button>
+      </div>
+      <div id="admin-users" class="admin-panel-content active">
+        <div style="overflow-x:auto">
+          <table class="data-table">
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Joined</th><th>Last Active</th><th>Actions</th></tr></thead>
+            <tbody id="admin-users-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="admin-invite" class="admin-panel-content">
+        <div class="panel" style="max-width:400px">
+          <div class="panel-title">Class Invite Code</div>
+          <div class="form-group">
+            <label class="form-label">Current Code</label>
+            <input type="text" id="invite-code-input" style="text-transform:uppercase;font-family:'DM Mono',monospace;letter-spacing:0.1em">
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="saveInviteCode()">Save Code</button>
+        </div>
+      </div>
+      <div id="admin-phases" class="admin-panel-content">
+        <div id="phase-configs-panel"></div>
+      </div>
+      <div id="admin-custom-fields" class="admin-panel-content">
+        <div class="panel" style="max-width:500px">
+          <div class="panel-title">Custom Fields</div>
+          <div id="custom-fields-list" style="margin-bottom:12px"></div>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="new-field-name" placeholder="Field name">
+            <select id="new-field-type" style="width:auto">
+              <option value="text">Text</option>
+              <option value="number">Number</option>
+              <option value="date">Date</option>
+            </select>
+            <button class="btn btn-primary btn-sm" onclick="addCustomField()">Add</button>
+          </div>
+        </div>
+      </div>
+      <div id="admin-all-activity" class="admin-panel-content">
+        <div id="all-activity-log"></div>
+      </div>
+    </div>
+
+  </div><!-- end main-content -->
+</div><!-- end screen-app -->
+
+<!-- ═══════════════════════════════════════════
+     NEW PROJECT MODAL
+═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="new-project-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">New Project</div>
+      <button class="modal-close" onclick="closeModal('new-project-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-section">
+        <div class="form-section-title">Drop a Document to Auto-fill</div>
+        <div class="drop-zone" id="new-proj-drop" onclick="document.getElementById('new-proj-file').click()" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')" ondrop="handleNewProjDrop(event)">
+          <div class="drop-zone-icon">📄</div>
+          <div>Drop PDF, Word, or image to auto-fill fields</div>
+        </div>
+        <input type="file" id="new-proj-file" style="display:none" accept=".pdf,.doc,.docx,.txt,.jpg,.png" onchange="handleNewProjFile(this.files[0])">
+        <div id="autofill-preview" style="display:none" class="autofill-preview"></div>
+      </div>
+      <div class="form-section">
+        <div class="form-section-title">Project Details</div>
+        <div class="form-group"><label class="form-label">Property Name *</label><input type="text" id="np-name"></div>
+        <div class="form-group"><label class="form-label">Address</label><input type="text" id="np-address"></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Purchase Price</label><input type="number" id="np-price" placeholder="0"></div>
+          <div class="form-group"><label class="form-label">Project Type *</label>
+            <select id="np-type">
+              <option value="acquisition">Acquisition</option>
+              <option value="development">Development</option>
+              <option value="value_add">Value-add / Rehab</option>
+              <option value="home_build">Home Build</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group"><label class="form-label">Assign To (Students)</label>
+          <select id="np-assign" multiple style="height:80px">
+          </select>
+        </div>
+        <div class="form-group"><label class="form-label">Notes</label><textarea id="np-notes" rows="3"></textarea></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('new-project-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveNewProject()">Create Project</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     ADD TASK MODAL
+═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="add-task-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Add Task</div>
+      <button class="modal-close" onclick="closeModal('add-task-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Title *</label><input type="text" id="task-title-input"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Assignee</label><select id="task-assignee-input"><option value="">Unassigned</option></select></div>
+        <div class="form-group"><label class="form-label">Due Date</label><input type="date" id="task-due-input"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Priority</label>
+          <select id="task-priority-input">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+          </select>
+        </div>
+        <div class="form-group"><label class="form-label">Status</label>
+          <select id="task-status-input">
+            <option value="not_started">Not Started</option>
+            <option value="in_progress">In Progress</option>
+            <option value="done">Done</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('add-task-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveTask()">Add Task</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     AI BAR
+═══════════════════════════════════════════ -->
+<div id="ai-bar">
+  <div class="ai-bar-inner">
+    <input type="text" id="ai-input" placeholder='e.g. "assign title review for Maple Street to me by Friday"' onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAICommand()}">
+    <button class="ai-mic-btn" id="mic-btn" onclick="toggleMic()" title="Voice input">🎙</button>
+    <button class="ai-send-btn" onclick="sendAICommand()" title="Send">↑</button>
+  </div>
+  <div class="ai-bar-label mono">AI Task Bar — type a plain English instruction or use the microphone</div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     JAVASCRIPT
+═══════════════════════════════════════════ -->
+<script>
+// ═══════════════════════════════════════════
+// CONFIGURATION — FILL THESE IN
+// ═══════════════════════════════════════════
+const SUPABASE_URL = 'https://kdfemcpzwtiilpfjkupj.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_jKPlNEu_r4Wemcbs0KYIdw_o1q5ehCo';
+
+// ═══════════════════════════════════════════
+// SUPABASE CLIENT INIT
+// ═══════════════════════════════════════════
+const { createClient } = supabase;
+const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ═══════════════════════════════════════════
+// APP STATE
+// ═══════════════════════════════════════════
+let currentUser = null;
+let currentProfile = null;
+let allProjects = [];
+let currentProjectId = null;
+let currentProjectData = null;
+let projectMembers = [];
+let allProfiles = [];
+let phasesConfig = {};
+let currentFilter = 'all';
+let recognition = null;
+let isListening = false;
+let currentTasks = [];
+
+// Phase checklists per project type
+const CHECKLISTS = {
+  acquisition: ['Title search','Zoning confirmed','Lien search','Environmental review','Property inspection','Insurance quote','Survey ordered','HOA review'],
+  development: ['Site control','Entitlement status','Utility availability','Environmental study','Traffic study','Soils report','Architect engaged','GC bids received'],
+  value_add: ['Rent roll review','Deferred maintenance list','Unit inspection','HVAC and roof condition','Plumbing and electrical review','Insurance quote','Contractor bids'],
+  home_build: ['Lot survey','Soil test','Architectural plans','Structural engineering','Utility hookup plan','HOA approval','Building permit submitted']
+};
+
+// Default tasks per phase/type
+const PHASE_TASKS = {
+  acquisition: {
+    'Intake': ['Initial property review','Schedule walkthrough','Document collection'],
+    'Due Diligence': ['Order title search','Schedule inspection','Request insurance quote'],
+    'Underwriting': ['Build financial model','Review rent rolls','Analyze expenses'],
+    'Market Analysis': ['Pull rent comps','Analyze vacancy rates','Research exit cap rates'],
+    'IC Approval': ['Prepare IC memo','Present to investment committee'],
+    'Close': ['Coordinate closing docs','Wire transfer','Record deed'],
+    'Asset Management': ['Onboard property management','Set up accounting','Lease-up strategy']
+  },
+  development: {
+    'Intake': ['Site control review','Initial feasibility check','Assemble project team'],
+    'Feasibility': ['Environmental screen','Utility check','Zoning review'],
+    'Pro Forma & Budget': ['Build development budget','Create pro forma','Identify equity/debt structure'],
+    'Market Analysis': ['Demand analysis','Competition study','Absorption review'],
+    'Financing & IC Approval': ['Secure construction loan','Finalize equity','IC presentation'],
+    'Permits': ['Submit building permits','Engage expeditor','Schedule inspections'],
+    'Construction & Draws': ['Manage draw schedule','Track milestones','Inspect work'],
+    'Schedule Tracking': ['Update schedule','Track completion dates','Punch list']
+  },
+  value_add: {
+    'Intake': ['Property walkthrough','Deferred maintenance assessment','Budget scoping'],
+    'Property Assessment': ['Unit-by-unit inspection','Mechanical review','Structural check'],
+    'Reno Budget': ['Get contractor bids','Finalize reno scope','Build CapEx schedule'],
+    'Market Analysis': ['Comparable rents','Renovation ROI analysis','Exit strategy'],
+    'IC Approval': ['Present reno plan','IC approval memo'],
+    'Renovation Execution': ['Manage contractors','Track milestones','Inspect work'],
+    'Rent & Lease-Up': ['Market units','Process applications','Execute leases']
+  },
+  home_build: {
+    'Intake': ['Site acquisition review','Neighborhood research','Builder interviews'],
+    'Site Analysis': ['Survey site','Soils report','Utility connections'],
+    'Build Budget': ['Get builder bids','Finalize specs','Establish contingency'],
+    'Market Analysis': ['Comparable sales','Neighborhood trends','Exit strategy'],
+    'Permits & Financing': ['Submit permits','Close construction loan'],
+    'Build Execution': ['Foundation','Framing','Mechanical/Electrical/Plumbing','Finishes'],
+    'CO & Close': ['Certificate of occupancy','Final inspections','Close sale']
+  }
+};
+
+// ═══════════════════════════════════════════
+// UTILITY FUNCTIONS
+// ═══════════════════════════════════════════
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+}
+
+function showView(name) {
+  ['portfolio','detail','professor','admin'].forEach(v => {
+    const el = document.getElementById('view-' + v);
+    if (el) el.style.display = 'none';
+  });
+  const target = document.getElementById('view-' + name);
+  if (target) target.style.display = 'block';
+  if (name === 'portfolio') loadPortfolio();
+  if (name === 'professor') loadProfessorView();
+  if (name === 'admin') loadAdminView();
+}
+
+function toast(msg, type = 'default') {
+  const t = document.createElement('div');
+  t.className = 'toast' + (type !== 'default' ? ' ' + type : '');
+  t.textContent = msg;
+  document.getElementById('toast-container').appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+}
+
+function fmt(n) {
+  if (!n && n !== 0) return '—';
+  return '$' + Number(n).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0});
+}
+
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+}
+
+function initials(name) {
+  if (!name) return '?';
+  return name.split(' ').map(p=>p[0]||'').join('').toUpperCase().slice(0,2);
+}
+
+function typeLabel(t) {
+  return {acquisition:'Acquisition',development:'Development',value_add:'Value-add',home_build:'Home Build'}[t] || t;
+}
+
+function typeBadgeClass(t) {
+  return 'type-badge badge-' + t;
+}
+
+// ═══════════════════════════════════════════
+// AUTH FUNCTIONS
+// ═══════════════════════════════════════════
+async function doLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const pwd = document.getElementById('login-password').value;
+  const errEl = document.getElementById('login-error');
+  errEl.style.display = 'none';
+
+  if (!email || !pwd) { showError(errEl, 'Please fill in all fields.'); return; }
+
+  try {
+    const { data, error } = await db.auth.signInWithPassword({ email, password: pwd });
+    if (error) { showError(errEl, error.message); return; }
+    await onAuthSuccess(data.user);
+    toast('Welcome back!', 'success');
+  } catch(e) { showError(errEl, 'Login failed. Please try again.'); }
+}
+
+async function doSignup() {
+  const name = document.getElementById('signup-name').value.trim();
+  const email = document.getElementById('signup-email').value.trim();
+  const pwd = document.getElementById('signup-password').value;
+  const code = document.getElementById('signup-code').value.trim().toUpperCase();
+  const errEl = document.getElementById('signup-error');
+  errEl.style.display = 'none';
+
+  if (!name || !email || !pwd || !code) { showError(errEl, 'Please fill in all fields.'); return; }
+  if (pwd.length < 8) { showError(errEl, 'Password must be at least 8 characters.'); return; }
+
+  try {
+    // Validate invite code
+    const { data: configData, error: configErr } = await db.from('config').select('invite_code').eq('id', 1).single();
+    if (configErr || !configData) { showError(errEl, 'Could not validate invite code.'); return; }
+    if (configData.invite_code.toUpperCase() !== code) { showError(errEl, 'Invalid invite code. Please check with your instructor.'); return; }
+
+    const { data, error } = await db.auth.signUp({ email, password: pwd });
+    if (error) { showError(errEl, error.message); return; }
+
+    if (data.user) {
+      const { error: profileErr } = await db.from('profiles').insert({
+        id: data.user.id, full_name: name, email, role: 'pending', invite_code_used: code
+      });
+      if (profileErr) { showError(errEl, 'Account created but profile setup failed.'); return; }
+      toast('Account created! Awaiting role assignment.', 'success');
+      showScreen('pending');
+      setupPendingScreen({ full_name: name, email, role: 'pending' });
+    }
+  } catch(e) { showError(errEl, 'Signup failed. Please try again.'); }
+}
+
+function showError(el, msg) {
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+async function onAuthSuccess(user) {
+  if (!user) return;
+  currentUser = user;
+
+  // Update last_active
+  await db.from('profiles').update({ last_active: new Date().toISOString() }).eq('id', user.id);
+
+  const { data: profile } = await db.from('profiles').select('*').eq('id', user.id).single();
+  if (!profile) { toast('Profile not found.', 'error'); return; }
+  currentProfile = profile;
+
+  // Load phase configs
+  await loadPhaseConfigs();
+
+  // Apply saved theme
+  if (profile.theme) document.documentElement.setAttribute('data-theme', profile.theme);
+  updateThemeIcon();
+
+  if (profile.role === 'pending') {
+    showScreen('pending');
+    setupPendingScreen(profile);
+    return;
+  }
+
+  // Load all profiles for assignee dropdowns
+  await loadAllProfiles();
+
+  setupTopbar(profile);
+  showScreen('app');
+  document.getElementById('ai-bar').classList.add('visible');
+  showView('portfolio');
+}
+
+function setupPendingScreen(profile) {
+  const el = document.getElementById('pending-user-display');
+  if (el) el.innerHTML = `<span>${profile.full_name}</span><span class="role-badge role-pending">Pending</span>`;
+  const nav = document.getElementById('topbar-pending');
+  if (nav) nav.style.display = 'flex';
+}
+
+function setupTopbar(profile) {
+  document.getElementById('topbar').style.display = 'flex';
+  document.getElementById('topbar-name').textContent = profile.full_name;
+  const rb = document.getElementById('topbar-role');
+  rb.textContent = profile.role.charAt(0).toUpperCase() + profile.role.slice(1);
+  rb.className = 'role-badge role-' + profile.role;
+
+  // Show nav buttons based on role
+  if (profile.role === 'admin' || profile.role === 'professor') {
+    document.getElementById('nav-professor').style.display = 'inline-flex';
+  }
+  if (profile.role === 'admin') {
+    document.getElementById('nav-admin').style.display = 'inline-flex';
+  }
+}
+
+async function logout() {
+  await db.auth.signOut();
+  currentUser = null; currentProfile = null; allProjects = [];
+  document.getElementById('topbar').style.display = 'none';
+  document.getElementById('topbar-pending').style.display = 'none';
+  document.getElementById('ai-bar').classList.remove('visible');
+  showScreen('login');
+}
+
+// ═══════════════════════════════════════════
+// INIT & SESSION
+// ═══════════════════════════════════════════
+async function init() {
+  const { data: { session } } = await db.auth.getSession();
+  if (session?.user) {
+    await onAuthSuccess(session.user);
+  } else {
+    showScreen('login');
+  }
+}
+
+async function loadPhaseConfigs() {
+  const { data } = await db.from('phase_configs').select('*');
+  if (data) {
+    data.forEach(row => { phasesConfig[row.project_type] = row.phases; });
+  } else {
+    // Fallback defaults
+    phasesConfig = {
+      acquisition: ['Intake','Due Diligence','Underwriting','Market Analysis','IC Approval','Close','Asset Management'],
+      development: ['Intake','Feasibility','Pro Forma & Budget','Market Analysis','Financing & IC Approval','Permits','Construction & Draws','Schedule Tracking'],
+      value_add: ['Intake','Property Assessment','Reno Budget','Market Analysis','IC Approval','Renovation Execution','Rent & Lease-Up'],
+      home_build: ['Intake','Site Analysis','Build Budget','Market Analysis','Permits & Financing','Build Execution','CO & Close']
+    };
+  }
+}
+
+async function loadAllProfiles() {
+  const { data } = await db.from('profiles').select('id, full_name, role, email').order('full_name');
+  if (data) allProfiles = data;
+}
+
+// ═══════════════════════════════════════════
+// THEME
+// ═══════════════════════════════════════════
+async function toggleTheme() {
+  const curr = document.documentElement.getAttribute('data-theme');
+  const next = curr === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  updateThemeIcon();
+  if (currentProfile) {
+    await db.from('profiles').update({ theme: next }).eq('id', currentProfile.id);
+    currentProfile.theme = next;
+  }
+}
+
+function updateThemeIcon() {
+  const theme = document.documentElement.getAttribute('data-theme');
+  document.getElementById('theme-icon').textContent = theme === 'dark' ? '☀' : '☽';
+}
+
+// ═══════════════════════════════════════════
+// PORTFOLIO
+// ═══════════════════════════════════════════
+async function loadPortfolio() {
+  const grid = document.getElementById('projects-grid');
+  grid.innerHTML = '<div class="loading-wrap"><div class="loading-spinner"></div></div>';
+
+  let query = db.from('projects').select('*, project_members(user_id, profiles(full_name))').eq('status','active').order('created_at', {ascending: false});
+
+  const { data: projects, error } = await query;
+  if (error) { grid.innerHTML = '<div class="empty-state"><div>Failed to load projects</div></div>'; return; }
+
+  allProjects = projects || [];
+  renderPortfolio();
+  loadStats();
+}
+
+function renderPortfolio() {
+  const grid = document.getElementById('projects-grid');
+  let filtered = allProjects;
+  if (currentFilter !== 'all') filtered = allProjects.filter(p => p.project_type === currentFilter);
+
+  if (!filtered.length) {
+    grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🏗</div><div>No projects yet</div><div style="font-size:12px;margin-top:6px;color:var(--text3)">Create your first project to get started</div></div>';
+    return;
+  }
+
+  grid.innerHTML = filtered.map(p => projectCardHTML(p)).join('');
+}
+
+function projectCardHTML(p) {
+  const phases = phasesConfig[p.project_type] || [];
+  const phaseIdx = p.phase_index || 0;
+  const phasePills = phases.map((ph, i) => {
+    if (i < phaseIdx) return `<span class="phase-pill pill-done">${ph}</span>`;
+    if (i === phaseIdx) return `<span class="phase-pill pill-active">${ph}</span>`;
+    return `<span class="phase-pill pill-upcoming">${ph}</span>`;
+  }).join('');
+
+  const members = (p.project_members || []).slice(0,4);
+  const avatars = members.map(m => `<div class="avatar" title="${m.profiles?.full_name||''}">${initials(m.profiles?.full_name||'')}</div>`).join('');
+
+  const pct = p.overall_progress || 0;
+  const today = new Date().toISOString().split('T')[0];
+
+  return `
+  <div class="project-card" data-type="${p.project_type}" onclick="openProject('${p.id}')">
+    <div class="card-header">
+      <div>
+        <div class="card-title">${p.name}</div>
+        <div class="card-address">${p.address || 'No address'}</div>
+      </div>
+      <span class="${typeBadgeClass(p.project_type)}">${typeLabel(p.project_type)}</span>
+    </div>
+    <div class="card-phase">Phase: ${phases[phaseIdx] || '—'}</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+    <div class="phase-pills">${phasePills}</div>
+    <div class="card-footer">
+      <div class="card-avatars">${avatars}</div>
+      <div class="card-tasks-due" style="font-size:11px;color:var(--text3)">${pct}% complete</div>
+    </div>
+  </div>`;
+}
+
+function filterProjects(type, el) {
+  currentFilter = type;
+  document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  renderPortfolio();
+}
+
+async function loadStats() {
+  const today = new Date().toISOString().split('T')[0];
+
+  document.getElementById('stat-projects').textContent = allProjects.length;
+
+  // Tasks due today across user's projects
+  const projectIds = allProjects.map(p => p.id);
+  if (projectIds.length > 0) {
+    const { count: taskCount } = await db.from('tasks').select('*', {count:'exact',head:true}).in('project_id', projectIds).eq('due_date', today).neq('status','done');
+    document.getElementById('stat-tasks').textContent = taskCount || 0;
+
+    const { count: docCount } = await db.from('documents').select('*',{count:'exact',head:true}).in('project_id', projectIds).eq('status','pending_signature');
+    document.getElementById('stat-docs').textContent = docCount || 0;
+  } else {
+    document.getElementById('stat-tasks').textContent = 0;
+    document.getElementById('stat-docs').textContent = 0;
+  }
+
+  const totalVal = allProjects.reduce((s, p) => s + (p.purchase_price || 0), 0);
+  document.getElementById('stat-value').textContent = totalVal >= 1000000
+    ? '$' + (totalVal/1000000).toFixed(1) + 'M'
+    : fmt(totalVal);
+}
+
+// ═══════════════════════════════════════════
+// NEW PROJECT
+// ═══════════════════════════════════════════
+function openNewProjectModal() {
+  // Populate student dropdown
+  const sel = document.getElementById('np-assign');
+  const students = allProfiles.filter(p => p.role === 'student' || p.role === 'professor' || p.role === 'admin');
+  sel.innerHTML = students.map(s => `<option value="${s.id}">${s.full_name} (${s.role})</option>`).join('');
+  document.getElementById('autofill-preview').style.display = 'none';
+  openModal('new-project-modal');
+}
+
+async function handleNewProjFile(file) {
+  if (!file) return;
+  const preview = document.getElementById('autofill-preview');
+  preview.style.display = 'block';
+  preview.textContent = 'Reading file...';
+
+  const text = await readFileText(file);
+  if (!text) { preview.textContent = 'Could not extract text from file.'; return; }
+
+  const filled = [];
+  const lines = text.split('\n').filter(l => l.trim());
+
+  // Simple extraction heuristics
+  for (const line of lines.slice(0,30)) {
+    const lower = line.toLowerCase();
+    if (!document.getElementById('np-address').value && (lower.includes('st ') || lower.includes('ave') || lower.includes('blvd') || lower.includes('drive') || lower.includes('road') || lower.match(/\d{4,5}/))) {
+      document.getElementById('np-address').value = line.trim();
+      filled.push('Address: ' + line.trim());
+    }
+    if (!document.getElementById('np-name').value && line.trim().length > 3 && line.trim().length < 60) {
+      document.getElementById('np-name').value = line.trim();
+      filled.push('Name: ' + line.trim());
+      break;
+    }
+  }
+  // Look for price
+  const priceMatch = text.match(/\$[\d,]+(?:\.\d+)?|\d+,\d{3}(?:,\d{3})*/);
+  if (priceMatch && !document.getElementById('np-price').value) {
+    const price = priceMatch[0].replace(/[$,]/g,'');
+    document.getElementById('np-price').value = price;
+    filled.push('Price: $' + Number(price).toLocaleString());
+  }
+  preview.textContent = filled.length ? 'Auto-filled: ' + filled.join(' | ') : 'No fields could be auto-detected from this file.';
+}
+
+function handleNewProjDrop(e) {
+  e.preventDefault();
+  document.getElementById('new-proj-drop').classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) handleNewProjFile(file);
+}
+
+async function readFileText(file) {
+  return new Promise(resolve => {
+    const r = new FileReader();
+    r.onload = e => resolve(e.target.result);
+    r.onerror = () => resolve('');
+    if (file.type === 'application/pdf') {
+      // PDF: read as binary for basic text extraction
+      r.readAsText(file, 'latin1');
+    } else {
+      r.readAsText(file);
+    }
+  });
+}
+
+async function saveNewProject() {
+  const name = document.getElementById('np-name').value.trim();
+  const type = document.getElementById('np-type').value;
+  if (!name) { toast('Project name is required.', 'error'); return; }
+
+  const phases = phasesConfig[type] || [];
+  const assignSel = document.getElementById('np-assign');
+  const assignedIds = Array.from(assignSel.selectedOptions).map(o => o.value);
+
+  const { data: proj, error } = await db.from('projects').insert({
+    name,
+    address: document.getElementById('np-address').value.trim(),
+    purchase_price: Number(document.getElementById('np-price').value) || null,
+    project_type: type,
+    notes: document.getElementById('np-notes').value.trim(),
+    current_phase: phases[0] || '',
+    phase_index: 0,
+    overall_progress: 0,
+    created_by: currentUser.id
+  }).select().single();
+
+  if (error) { toast('Failed to create project: ' + error.message, 'error'); return; }
+
+  // Add creator as member
+  const membersToAdd = [...new Set([currentUser.id, ...assignedIds])];
+  await db.from('project_members').insert(membersToAdd.map(uid => ({ project_id: proj.id, user_id: uid })));
+
+  // Generate checklist
+  const checklistItems = (CHECKLISTS[type] || []).map(item => ({
+    project_id: proj.id, item_text: item, assignee_id: currentUser.id
+  }));
+  if (checklistItems.length) await db.from('checklist_items').insert(checklistItems);
+
+  // Generate initial tasks
+  await generateTasksForPhase(proj.id, phases[0], type, currentUser.id);
+
+  // Log
+  await logActivity(proj.id, `created project "${name}" (${typeLabel(type)})`);
+
+  closeModal('new-project-modal');
+  toast('Project created!', 'success');
+  loadPortfolio();
+}
+
+async function generateTasksForPhase(projectId, phase, type, ownerId) {
+  const tasks = (PHASE_TASKS[type] && PHASE_TASKS[type][phase]) || [];
+  if (!tasks.length) return;
+  const taskRows = tasks.map(t => ({
+    project_id: projectId,
+    title: t,
+    assignee_id: ownerId,
+    status: 'not_started',
+    priority: 'medium',
+    phase,
+    auto_generated: true,
+    created_by: currentUser?.id || ownerId
+  }));
+  await db.from('tasks').insert(taskRows);
+}
+
+// ═══════════════════════════════════════════
+// PROJECT DETAIL
+// ═══════════════════════════════════════════
+async function openProject(id) {
+  currentProjectId = id;
+  const { data: proj } = await db.from('projects').select('*, project_members(user_id, profiles(full_name, role))').eq('id', id).single();
+  if (!proj) { toast('Project not found.', 'error'); return; }
+  currentProjectData = proj;
+  projectMembers = proj.project_members || [];
+
+  // Render header
+  document.getElementById('detail-name').textContent = proj.name;
+  document.getElementById('detail-address').textContent = proj.address || '';
+  const badge = document.getElementById('detail-type-badge');
+  badge.textContent = typeLabel(proj.project_type);
+  badge.className = typeBadgeClass(proj.project_type);
+  document.getElementById('detail-phase-label').textContent = proj.current_phase || '';
+  const pct = proj.overall_progress || 0;
+  document.getElementById('detail-pct').textContent = pct + '%';
+  document.getElementById('detail-progress-fill').style.width = pct + '%';
+  document.getElementById('detail-progress-fill').style.background = {acquisition:'var(--c-acq)',development:'var(--c-dev)',value_add:'var(--c-val)',home_build:'var(--c-hom)'}[proj.project_type] || 'var(--text)';
+
+  // Hide advance phase for student
+  if (currentProfile.role === 'student') document.getElementById('advance-phase-btn').style.display = 'none';
+
+  showView('portfolio');
+  document.getElementById('view-portfolio').style.display = 'none';
+  document.getElementById('view-detail').style.display = 'block';
+  switchModule('checklist', document.querySelector('.module-tab[data-module="checklist"]'));
+}
+
+function closeDetail() {
+  document.getElementById('view-detail').style.display = 'none';
+  document.getElementById('view-portfolio').style.display = 'block';
+  loadPortfolio();
+}
+
+function switchModule(name, el) {
+  document.querySelectorAll('.module-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.module-content').forEach(c => c.classList.remove('active'));
+  if (el) el.classList.add('active');
+  const content = document.getElementById('mod-' + name);
+  if (content) content.classList.add('active');
+
+  // Load data for each module
+  const loaders = {
+    checklist: loadChecklist, market: loadMarketAnalysis,
+    cost: loadCostEstimate, documents: loadDocuments,
+    accounting: loadAccounting, tasks: loadTasksModule,
+    contractor: loadContractor, approvals: loadApprovals,
+    activity: loadActivityLog, comments: loadComments
+  };
+  if (loaders[name]) loaders[name]();
+}
+
+async function advancePhase() {
+  if (!currentProjectData) return;
+  const phases = phasesConfig[currentProjectData.project_type] || [];
+  const nextIdx = (currentProjectData.phase_index || 0) + 1;
+  if (nextIdx >= phases.length) { toast('Already at final phase.'); return; }
+
+  const nextPhase = phases[nextIdx];
+  const { error } = await db.from('projects').update({ phase_index: nextIdx, current_phase: nextPhase }).eq('id', currentProjectId);
+  if (error) { toast('Failed to advance phase.', 'error'); return; }
+
+  currentProjectData.phase_index = nextIdx;
+  currentProjectData.current_phase = nextPhase;
+  document.getElementById('detail-phase-label').textContent = nextPhase;
+
+  // Auto-generate tasks for new phase
+  await generateTasksForPhase(currentProjectId, nextPhase, currentProjectData.project_type, currentUser.id);
+
+  await logActivity(currentProjectId, `advanced project to phase "${nextPhase}"`);
+  toast('Phase advanced to: ' + nextPhase, 'success');
+}
+
+// ═══════════════════════════════════════════
+// CHECKLIST MODULE
+// ═══════════════════════════════════════════
+async function loadChecklist() {
+  const container = document.getElementById('checklist-list');
+  container.innerHTML = '<div class="loading-wrap"><div class="loading-spinner"></div></div>';
+
+  const { data: items } = await db.from('checklist_items').select('*, profiles!checklist_items_assignee_id_fkey(full_name)').eq('project_id', currentProjectId).order('created_at');
+
+  if (!items || !items.length) {
+    container.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:20px 0">No checklist items for this project.</div>';
+    return;
+  }
+
+  container.innerHTML = items.map(item => `
+    <div class="checklist-item ${item.is_checked ? 'checked' : ''}" id="ci-${item.id}">
+      <div class="check-box ${item.is_checked ? 'checked' : ''}" onclick="toggleChecklistItem('${item.id}', ${item.is_checked})"></div>
+      <div class="checklist-text" style="flex:1;font-size:13px">${item.item_text}</div>
+      ${item.is_checked && item.checked_at ? `<div class="checklist-meta">✓ ${fmtDate(item.checked_at)}</div>` : ''}
+      <div class="checklist-meta">${item.profiles?.full_name || 'Unassigned'}</div>
+    </div>
+  `).join('');
+
+  // Update progress
+  const done = items.filter(i => i.is_checked).length;
+  const pct = Math.round((done / items.length) * 100);
+  await db.from('projects').update({ overall_progress: pct }).eq('id', currentProjectId);
+  document.getElementById('detail-pct').textContent = pct + '%';
+  document.getElementById('detail-progress-fill').style.width = pct + '%';
+}
+
+async function toggleChecklistItem(id, wasChecked) {
+  const nowChecked = !wasChecked;
+  await db.from('checklist_items').update({
+    is_checked: nowChecked,
+    checked_by: nowChecked ? currentUser.id : null,
+    checked_at: nowChecked ? new Date().toISOString() : null
+  }).eq('id', id);
+
+  const row = document.getElementById('ci-' + id);
+  if (row) {
+    row.classList.toggle('checked', nowChecked);
+    row.querySelector('.check-box').classList.toggle('checked', nowChecked);
+  }
+
+  await logActivity(currentProjectId, `${nowChecked ? 'checked' : 'unchecked'} checklist item`);
+  loadChecklist();
+}
+
+// ═══════════════════════════════════════════
+// MARKET ANALYSIS MODULE
+// ═══════════════════════════════════════════
+async function loadMarketAnalysis() {
+  const { data } = await db.from('market_analysis').select('*').eq('project_id', currentProjectId).single();
+  if (data) {
+    document.getElementById('ma-vacancy').value = data.submarket_vacancy_rate || '';
+    document.getElementById('ma-absorption').value = data.absorption_rate || '';
+    document.getElementById('ma-cap-rate').value = data.exit_cap_rate || '';
+    document.getElementById('ma-supply').value = data.new_supply_notes || '';
+    document.getElementById('ma-demand').value = data.demand_drivers || '';
+    document.getElementById('ma-competitor').value = data.competitor_reno_notes || '';
+  }
+  loadRentComps();
+}
+
+async function saveMarketAnalysis() {
+  const val = {
+    project_id: currentProjectId,
+    submarket_vacancy_rate: Number(document.getElementById('ma-vacancy').value) || null,
+    absorption_rate: Number(document.getElementById('ma-absorption').value) || null,
+    exit_cap_rate: Number(document.getElementById('ma-cap-rate').value) || null,
+    new_supply_notes: document.getElementById('ma-supply').value,
+    demand_drivers: document.getElementById('ma-demand').value,
+    competitor_reno_notes: document.getElementById('ma-competitor').value,
+    updated_at: new Date().toISOString()
+  };
+  await db.from('market_analysis').upsert(val, { onConflict: 'project_id' });
+}
+
+async function loadRentComps() {
+  const { data } = await db.from('rent_comps').select('*').eq('project_id', currentProjectId).order('created_at');
+  const tbody = document.getElementById('rent-comps-body');
+  if (!data || !data.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--text3)">No comps added yet.</td></tr>'; return; }
+  tbody.innerHTML = data.map(c => `
+    <tr>
+      <td><input class="inline-input" value="${c.address||''}" onchange="updateRentComp('${c.id}','address',this.value)"></td>
+      <td><input class="inline-input" value="${c.bed_bath||''}" onchange="updateRentComp('${c.id}','bed_bath',this.value)" style="width:80px"></td>
+      <td><input class="inline-input" type="number" value="${c.asking_rent||''}" onchange="updateRentComp('${c.id}','asking_rent',this.value)" style="width:90px"></td>
+      <td><input class="inline-input" type="number" value="${c.effective_rent||''}" onchange="updateRentComp('${c.id}','effective_rent',this.value)" style="width:90px"></td>
+      <td><button class="btn btn-sm" style="color:#E53E3E" onclick="deleteRentComp('${c.id}')">✕</button></td>
+    </tr>
+  `).join('');
+}
+
+async function addRentComp() {
+  await db.from('rent_comps').insert({ project_id: currentProjectId });
+  loadRentComps();
+}
+
+async function updateRentComp(id, field, value) {
+  await db.from('rent_comps').update({ [field]: value }).eq('id', id);
+}
+
+async function deleteRentComp(id) {
+  await db.from('rent_comps').delete().eq('id', id);
+  loadRentComps();
+}
+
+// ═══════════════════════════════════════════
+// COST ESTIMATE MODULE
+// ═══════════════════════════════════════════
+async function loadCostEstimate() {
+  const { data } = await db.from('cost_estimates').select('*').eq('project_id', currentProjectId).single();
+  if (data) {
+    document.getElementById('cost-hard').value = data.hard_costs || 0;
+    document.getElementById('cost-soft').value = data.soft_costs || 0;
+    document.getElementById('cost-capex').value = data.capex || 0;
+    document.getElementById('cost-contingency').value = data.contingency || 0;
+    document.getElementById('cost-financing').value = data.financing_costs || 0;
+    document.getElementById('cost-notes').value = data.notes || '';
+    calcCostTotal();
+  }
+}
+
+function calcCostTotal() {
+  const fields = ['cost-hard','cost-soft','cost-capex','cost-contingency','cost-financing'];
+  const total = fields.reduce((s,f) => s + (Number(document.getElementById(f).value)||0), 0);
+  document.getElementById('cost-total').textContent = fmt(total);
+}
+
+async function saveCostEstimate() {
+  calcCostTotal();
+  await db.from('cost_estimates').upsert({
+    project_id: currentProjectId,
+    hard_costs: Number(document.getElementById('cost-hard').value)||0,
+    soft_costs: Number(document.getElementById('cost-soft').value)||0,
+    capex: Number(document.getElementById('cost-capex').value)||0,
+    contingency: Number(document.getElementById('cost-contingency').value)||0,
+    financing_costs: Number(document.getElementById('cost-financing').value)||0,
+    notes: document.getElementById('cost-notes').value,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'project_id' });
+}
+
+// ═══════════════════════════════════════════
+// DOCUMENTS MODULE
+// ═══════════════════════════════════════════
+async function loadDocuments() {
+  const { data } = await db.from('documents').select('*, profiles!documents_uploaded_by_fkey(full_name)').eq('project_id', currentProjectId).order('created_at', {ascending:false});
+  const list = document.getElementById('doc-list');
+  if (!data || !data.length) { list.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:12px 0">No documents uploaded yet.</div>'; return; }
+  list.innerHTML = '<div class="panel"><table class="data-table"><thead><tr><th>Name</th><th>Type</th><th>Uploaded</th><th>By</th><th>Status</th><th>Actions</th></tr></thead><tbody>' +
+    data.map(d => `
+      <tr>
+        <td>${d.name}</td>
+        <td style="color:var(--text3)">${d.file_type || '—'}</td>
+        <td style="color:var(--text3)">${fmtDate(d.created_at)}</td>
+        <td>${d.profiles?.full_name || '—'}</td>
+        <td><span class="doc-status doc-status-${d.status}">${d.status?.replace('_',' ')}</span></td>
+        <td style="display:flex;gap:4px">
+          <button class="btn btn-ghost btn-sm" onclick="sendDoc('${d.id}','title')">→ Title</button>
+          <button class="btn btn-ghost btn-sm" onclick="sendDoc('${d.id}','contractor')">→ GC</button>
+          ${currentProfile.role !== 'student' ? `<button class="btn btn-sm" style="color:#2F855A" onclick="approveDoc('${d.id}')">Approve</button><button class="btn btn-sm" style="color:#E53E3E" onclick="rejectDoc('${d.id}')">Reject</button>` : ''}
+        </td>
+      </tr>
+    `).join('') + '</tbody></table></div>';
+}
+
+function handleDocDrop(e) {
+  e.preventDefault();
+  document.getElementById('doc-drop-zone').classList.remove('dragover');
+  handleDocFiles(e.dataTransfer.files);
+}
+
+async function handleDocFiles(files) {
+  for (const file of files) {
+    await uploadDocument(file);
+  }
+  loadDocuments();
+}
+
+async function uploadDocument(file) {
+  // Upload to Supabase Storage
+  const path = `${currentProjectId}/${Date.now()}_${file.name}`;
+  const { error: uploadErr } = await db.storage.from('project-documents').upload(path, file);
+
+  const meta = {
+    project_id: currentProjectId,
+    name: file.name,
+    file_path: uploadErr ? null : path,
+    file_type: file.type,
+    file_size: file.size,
+    status: 'draft',
+    uploaded_by: currentUser.id
+  };
+  const { error: metaErr } = await db.from('documents').insert(meta);
+
+  if (metaErr) { toast('Failed to save document metadata.', 'error'); return; }
+  await logActivity(currentProjectId, `uploaded document "${file.name}"`);
+  toast('Document uploaded: ' + file.name, 'success');
+}
+
+async function sendDoc(docId, recipient) {
+  await db.from('documents').update({ status: 'sent', sent_to: recipient, sent_at: new Date().toISOString() }).eq('id', docId);
+  await logActivity(currentProjectId, `sent document to ${recipient}`);
+  toast('Document sent to ' + recipient, 'success');
+  loadDocuments();
+}
+
+async function approveDoc(docId) {
+  await db.from('documents').update({ status: 'signed', approved_by: currentUser.id, approved_at: new Date().toISOString() }).eq('id', docId);
+  await logActivity(currentProjectId, 'approved document');
+  toast('Document approved', 'success');
+  loadDocuments();
+}
+
+async function rejectDoc(docId) {
+  await db.from('documents').update({ status: 'draft' }).eq('id', docId);
+  await logActivity(currentProjectId, 'rejected document');
+  toast('Document rejected');
+  loadDocuments();
+}
+
+// ═══════════════════════════════════════════
+// ACCOUNTING MODULE
+// ═══════════════════════════════════════════
+async function loadAccounting() {
+  await loadAccountingItems();
+  await loadInvoices();
+  // Show draw schedule for dev and home build
+  const showDraw = ['development','home_build'].includes(currentProjectData?.project_type);
+  document.getElementById('draw-panel').style.display = showDraw ? 'block' : 'none';
+  if (showDraw) await loadDrawSchedule();
+}
+
+async function loadAccountingItems() {
+  const { data } = await db.from('accounting_items').select('*').eq('project_id', currentProjectId).order('created_at');
+  const tbody = document.getElementById('acct-body');
+  if (!data || !data.length) { tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text3)">No line items yet.</td></tr>'; return; }
+  tbody.innerHTML = data.map(item => {
+    const variance = (item.actual||0) - (item.budgeted||0);
+    const overBudget = variance > 0;
+    return `<tr class="${overBudget ? 'over-budget' : ''}">
+      <td><input class="inline-input" value="${item.category||''}" onchange="updateAccounting('${item.id}','category',this.value)"></td>
+      <td><input class="inline-input" value="${item.line_item||''}" onchange="updateAccounting('${item.id}','line_item',this.value)"></td>
+      <td><input class="inline-input" type="number" value="${item.budgeted||0}" onchange="updateAccounting('${item.id}','budgeted',this.value)" style="width:90px"></td>
+      <td><input class="inline-input" type="number" value="${item.actual||0}" onchange="updateAccounting('${item.id}','actual',this.value)" style="width:90px"></td>
+      <td style="font-weight:${overBudget?600:400}">${overBudget?'+':''}${fmt(variance)}</td>
+      <td><button class="btn btn-sm" style="color:#E53E3E" onclick="deleteAccounting('${item.id}')">✕</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function addAccountingItem() {
+  await db.from('accounting_items').insert({ project_id: currentProjectId, category: 'General', line_item: 'New Item' });
+  loadAccountingItems();
+}
+
+async function updateAccounting(id, field, value) {
+  await db.from('accounting_items').update({ [field]: field === 'budgeted' || field === 'actual' ? Number(value) : value }).eq('id', id);
+  loadAccountingItems();
+}
+
+async function deleteAccounting(id) {
+  await db.from('accounting_items').delete().eq('id', id);
+  loadAccountingItems();
+}
+
+async function loadInvoices() {
+  const { data } = await db.from('invoices').select('*').eq('project_id', currentProjectId).order('created_at', {ascending:false});
+  const tbody = document.getElementById('invoice-body');
+  if (!data || !data.length) { tbody.innerHTML = '<tr><td colspan="5" style="color:var(--text3)">No invoices yet.</td></tr>'; return; }
+  tbody.innerHTML = data.map(inv => `
+    <tr>
+      <td><input class="inline-input" value="${inv.vendor||''}" onchange="updateInvoice('${inv.id}','vendor',this.value)"></td>
+      <td><input class="inline-input" type="number" value="${inv.amount||0}" onchange="updateInvoice('${inv.id}','amount',this.value)" style="width:90px"></td>
+      <td><input class="inline-input" type="date" value="${inv.invoice_date||''}" onchange="updateInvoice('${inv.id}','invoice_date',this.value)"></td>
+      <td>
+        <button class="btn btn-sm ${inv.is_paid ? 'btn-ghost' : 'btn-primary'} btn-sm" onclick="toggleInvoicePaid('${inv.id}',${inv.is_paid})">
+          ${inv.is_paid ? '✓ Paid' : 'Mark Paid'}
+        </button>
+      </td>
+      <td><button class="btn btn-sm" style="color:#E53E3E" onclick="deleteInvoice('${inv.id}')">✕</button></td>
+    </tr>
+  `).join('');
+}
+
+async function addInvoice() {
+  await db.from('invoices').insert({ project_id: currentProjectId, vendor: 'New Vendor' });
+  loadInvoices();
+}
+
+async function updateInvoice(id, field, value) {
+  await db.from('invoices').update({ [field]: field === 'amount' ? Number(value) : value }).eq('id', id);
+}
+
+async function deleteInvoice(id) {
+  await db.from('invoices').delete().eq('id', id);
+  loadInvoices();
+}
+
+async function toggleInvoicePaid(id, wasPaid) {
+  await db.from('invoices').update({ is_paid: !wasPaid }).eq('id', id);
+  loadInvoices();
+}
+
+async function loadDrawSchedule() {
+  const { data } = await db.from('draw_schedule').select('*').eq('project_id', currentProjectId).order('draw_number');
+  const tbody = document.getElementById('draw-body');
+  if (!data || !data.length) { tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text3)">No draws yet.</td></tr>'; return; }
+  tbody.innerHTML = data.map(d => `
+    <tr>
+      <td>${d.draw_number}</td>
+      <td><input class="inline-input" type="number" value="${d.amount||0}" onchange="updateDraw('${d.id}','amount',this.value)" style="width:100px"></td>
+      <td><input class="inline-input" type="date" value="${d.submitted_date||''}" onchange="updateDraw('${d.id}','submitted_date',this.value)"></td>
+      <td><input class="inline-input" type="date" value="${d.approved_date||''}" onchange="updateDraw('${d.id}','approved_date',this.value)"></td>
+      <td>
+        <select class="inline-input" style="width:100px" onchange="updateDraw('${d.id}','status',this.value)">
+          <option ${d.status==='pending'?'selected':''} value="pending">Pending</option>
+          <option ${d.status==='approved'?'selected':''} value="approved">Approved</option>
+          <option ${d.status==='disbursed'?'selected':''} value="disbursed">Disbursed</option>
+        </select>
+      </td>
+      <td><button class="btn btn-sm" style="color:#E53E3E" onclick="deleteDraw('${d.id}')">✕</button></td>
+    </tr>
+  `).join('');
+}
+
+async function addDraw() {
+  const { data: existing } = await db.from('draw_schedule').select('draw_number').eq('project_id', currentProjectId).order('draw_number', {ascending:false}).limit(1);
+  const nextNum = existing?.length ? (existing[0].draw_number + 1) : 1;
+  await db.from('draw_schedule').insert({ project_id: currentProjectId, draw_number: nextNum });
+  loadDrawSchedule();
+}
+
+async function updateDraw(id, field, value) {
+  await db.from('draw_schedule').update({ [field]: field === 'amount' ? Number(value) : value }).eq('id', id);
+}
+
+async function deleteDraw(id) {
+  await db.from('draw_schedule').delete().eq('id', id);
+  loadDrawSchedule();
+}
+
+// ═══════════════════════════════════════════
+// TASKS MODULE
+// ═══════════════════════════════════════════
+async function loadTasksModule() {
+  const { data } = await db.from('tasks').select('*, profiles!tasks_assignee_id_fkey(full_name)').eq('project_id', currentProjectId).order('due_date', {ascending:true, nullsFirst:false});
+  currentTasks = data || [];
+
+  // Populate assignee filter
+  const sel = document.getElementById('task-filter-assignee');
+  const assignees = [...new Set(currentTasks.filter(t => t.profiles).map(t => JSON.stringify({id: t.assignee_id, name: t.profiles.full_name})))].map(s => JSON.parse(s));
+  sel.innerHTML = '<option value="">All Assignees</option>' + assignees.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+
+  // Populate add task assignee dropdown
+  const taSel = document.getElementById('task-assignee-input');
+  taSel.innerHTML = '<option value="">Unassigned</option>' + allProfiles.map(p => `<option value="${p.id}">${p.full_name}</option>`).join('');
+
+  renderTasks();
+}
+
+function renderTasks() {
+  const list = document.getElementById('task-list');
+  const filterAssignee = document.getElementById('task-filter-assignee').value;
+  const filterStatus = document.getElementById('task-filter-status').value;
+
+  let tasks = currentTasks;
+  if (filterAssignee) tasks = tasks.filter(t => t.assignee_id === filterAssignee);
+  if (filterStatus) tasks = tasks.filter(t => t.status === filterStatus);
+
+  if (!tasks.length) { list.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:20px 0">No tasks match the current filters.</div>'; return; }
+
+  list.innerHTML = tasks.map(t => `
+    <div class="task-item">
+      <div class="task-status-dot task-status-${t.status}"></div>
+      <div class="task-title ${t.status === 'done' ? 'done' : ''}">${t.title}</div>
+      <span class="priority-badge priority-${t.priority}">${t.priority}</span>
+      <div style="font-size:12px;color:var(--text3)">${t.profiles?.full_name || 'Unassigned'}</div>
+      <div style="font-size:12px;color:var(--text3)">${t.due_date ? fmtDate(t.due_date) : '—'}</div>
+      <select class="inline-input" style="width:110px;font-size:12px" onchange="updateTaskStatus('${t.id}',this.value)">
+        <option value="not_started" ${t.status==='not_started'?'selected':''}>Not Started</option>
+        <option value="in_progress" ${t.status==='in_progress'?'selected':''}>In Progress</option>
+        <option value="done" ${t.status==='done'?'selected':''}>Done</option>
+      </select>
+      ${currentProfile.role !== 'student' ? `<button class="btn btn-sm" style="color:#E53E3E" onclick="deleteTask('${t.id}')">✕</button>` : ''}
+    </div>
+  `).join('');
+}
+
+function openAddTaskModal() {
+  document.getElementById('task-title-input').value = '';
+  document.getElementById('task-due-input').value = '';
+  openModal('add-task-modal');
+}
+
+async function saveTask() {
+  const title = document.getElementById('task-title-input').value.trim();
+  if (!title) { toast('Task title is required.', 'error'); return; }
+
+  await db.from('tasks').insert({
+    project_id: currentProjectId,
+    title,
+    assignee_id: document.getElementById('task-assignee-input').value || null,
+    due_date: document.getElementById('task-due-input').value || null,
+    priority: document.getElementById('task-priority-input').value,
+    status: document.getElementById('task-status-input').value,
+    created_by: currentUser.id
+  });
+
+  await logActivity(currentProjectId, `added task "${title}"`);
+  closeModal('add-task-modal');
+  toast('Task added', 'success');
+  loadTasksModule();
+}
+
+async function updateTaskStatus(id, status) {
+  await db.from('tasks').update({ status, updated_at: new Date().toISOString() }).eq('id', id);
+  await logActivity(currentProjectId, `updated task status to "${status}"`);
+  loadTasksModule();
+}
+
+async function deleteTask(id) {
+  await db.from('tasks').delete().eq('id', id);
+  loadTasksModule();
+}
+
+// ═══════════════════════════════════════════
+// CONTRACTOR MODULE
+// ═══════════════════════════════════════════
+async function loadContractor() {
+  // Load scope of work (last sent)
+  const { data: comms } = await db.from('contractor_comms').select('*').eq('project_id', currentProjectId).order('sent_at', {ascending:false}).limit(1);
+  document.getElementById('scope-text').value = comms?.[0]?.scope_of_work || '';
+
+  // Load responses
+  const { data: responses } = await db.from('contractor_responses').select('*').eq('project_id', currentProjectId).order('created_at');
+  const respDiv = document.getElementById('contractor-responses');
+  if (!responses || !responses.length) { respDiv.innerHTML = '<div style="color:var(--text3);font-size:13px">No responses yet.</div>'; }
+  else {
+    respDiv.innerHTML = responses.map(r => `
+      <div class="panel" style="margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <strong>${r.contractor_name}</strong>
+          <span class="doc-status" style="font-size:10px;padding:2px 6px;border-radius:10px;background:${r.status==='approved'?'#F0FDF4':r.status==='rejected'?'#FFF5F5':'var(--bg3)'};color:${r.status==='approved'?'#166534':r.status==='rejected'?'#C53030':'var(--text2)'}">${r.status}</span>
+        </div>
+        <div style="font-size:13px;color:var(--text2)">Quote: ${fmt(r.quoted_price)} | Schedule: ${r.proposed_schedule||'—'}</div>
+        ${currentProfile.role !== 'student' && r.status === 'pending' ? `
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <button class="btn btn-sm" style="color:#2F855A" onclick="approveContractor('${r.id}')">Approve</button>
+          <button class="btn btn-sm" style="color:#E53E3E" onclick="rejectContractor('${r.id}')">Reject</button>
+        </div>` : ''}
+      </div>
+    `).join('');
+  }
+
+  // Load work orders
+  const { data: wos } = await db.from('work_orders').select('*').eq('project_id', currentProjectId).order('created_at');
+  const woDiv = document.getElementById('work-orders-list');
+  if (!wos || !wos.length) { woDiv.innerHTML = '<div style="color:var(--text3);font-size:13px">No work orders yet.</div>'; }
+  else {
+    woDiv.innerHTML = wos.map(wo => `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span style="flex:1;font-size:13px">${wo.title||'Work Order'}</span>
+        <select class="inline-input" style="width:120px;font-size:12px" onchange="updateWorkOrder('${wo.id}',this.value)">
+          <option ${wo.status==='draft'?'selected':''} value="draft">Draft</option>
+          <option ${wo.status==='approved'?'selected':''} value="approved">Approved</option>
+          <option ${wo.status==='in_progress'?'selected':''} value="in_progress">In Progress</option>
+          <option ${wo.status==='complete'?'selected':''} value="complete">Complete</option>
+        </select>
+      </div>
+    `).join('');
+  }
+}
+
+async function sendScopeOfWork() {
+  const scope = document.getElementById('scope-text').value.trim();
+  if (!scope) { toast('Please write a scope of work first.', 'error'); return; }
+  await db.from('contractor_comms').insert({ project_id: currentProjectId, scope_of_work: scope, sent_by: currentUser.id });
+  await logActivity(currentProjectId, 'sent scope of work to contractors');
+  toast('Scope of work sent', 'success');
+}
+
+async function addContractorResponse() {
+  const name = prompt('Contractor name:');
+  if (!name) return;
+  await db.from('contractor_responses').insert({ project_id: currentProjectId, contractor_name: name, response_date: new Date().toISOString().split('T')[0] });
+  loadContractor();
+}
+
+async function approveContractor(id) {
+  await db.from('contractor_responses').update({ status: 'approved' }).eq('id', id);
+  // Create work order
+  const { data: resp } = await db.from('contractor_responses').select('contractor_name').eq('id', id).single();
+  await db.from('work_orders').insert({ project_id: currentProjectId, contractor_response_id: id, title: `Work Order — ${resp?.contractor_name||'Contractor'}`, status: 'draft' });
+  await logActivity(currentProjectId, `approved contractor response from ${resp?.contractor_name}`);
+  toast('Contractor approved. Work order created.', 'success');
+  loadContractor();
+}
+
+async function rejectContractor(id) {
+  await db.from('contractor_responses').update({ status: 'rejected' }).eq('id', id);
+  await logActivity(currentProjectId, 'rejected contractor response');
+  toast('Contractor rejected.');
+  loadContractor();
+}
+
+async function updateWorkOrder(id, status) {
+  await db.from('work_orders').update({ status }).eq('id', id);
+  await logActivity(currentProjectId, `updated work order status to ${status}`);
+}
+
+// ═══════════════════════════════════════════
+// APPROVALS MODULE
+// ═══════════════════════════════════════════
+async function loadApprovals() {
+  const { data } = await db.from('approvals').select('*, profiles!approvals_submitted_by_fkey(full_name)').eq('project_id', currentProjectId).order('submitted_at', {ascending:false});
+  const list = document.getElementById('approvals-list');
+  if (!data || !data.length) { list.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:12px 0">No items pending approval.</div>'; return; }
+  list.innerHTML = data.map(a => `
+    <div class="panel" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      <div style="flex:1">
+        <div style="font-size:14px;font-weight:600">${a.document_name}</div>
+        <div style="font-size:12px;color:var(--text3)">Submitted by ${a.profiles?.full_name || '—'} · ${fmtDate(a.submitted_at)}</div>
+      </div>
+      <span style="font-size:11px;font-weight:600;padding:3px 8px;border-radius:10px;background:${a.status==='approved'?'#F0FDF4':a.status==='rejected'?'#FFF5F5':'#FFFBEB'};color:${a.status==='approved'?'#166534':a.status==='rejected'?'#C53030':'#92400E'}">${a.status}</span>
+      ${currentProfile.role !== 'student' && a.status === 'pending' ? `
+      <button class="btn btn-sm" style="color:#2F855A" onclick="actionApproval('${a.id}','approved')">Approve</button>
+      <button class="btn btn-sm" style="color:#E53E3E" onclick="actionApproval('${a.id}','rejected')">Reject</button>
+      ` : ''}
+    </div>
+  `).join('');
+}
+
+async function addApprovalItem() {
+  const name = prompt('Document/item name for approval:');
+  if (!name) return;
+  await db.from('approvals').insert({ project_id: currentProjectId, document_name: name, submitted_by: currentUser.id });
+  await logActivity(currentProjectId, `submitted "${name}" for approval`);
+  toast('Approval request submitted');
+  loadApprovals();
+}
+
+async function actionApproval(id, status) {
+  await db.from('approvals').update({ status, actioned_by: currentUser.id, actioned_at: new Date().toISOString() }).eq('id', id);
+  await logActivity(currentProjectId, `${status} approval request`);
+  toast(`Item ${status}`, status === 'approved' ? 'success' : 'default');
+  loadApprovals();
+}
+
+// ═══════════════════════════════════════════
+// ACTIVITY LOG
+// ═══════════════════════════════════════════
+async function logActivity(projectId, action) {
+  if (!currentUser || !currentProfile) return;
+  await db.from('activity_log').insert({
+    project_id: projectId,
+    user_id: currentUser.id,
+    user_name: currentProfile.full_name,
+    user_role: currentProfile.role,
+    action
+  });
+}
+
+async function loadActivityLog() {
+  const { data } = await db.from('activity_log').select('*').eq('project_id', currentProjectId).order('created_at', {ascending:false}).limit(100);
+  renderActivityLog(document.getElementById('activity-list'), data);
+}
+
+function renderActivityLog(container, data) {
+  if (!data || !data.length) { container.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:12px 0">No activity yet.</div>'; return; }
+  container.innerHTML = data.map(e => `
+    <div class="log-entry">
+      <div class="log-avatar">${initials(e.user_name)}</div>
+      <div class="log-body">
+        <span class="log-user">${e.user_name}</span>
+        <span class="role-badge role-${e.user_role}" style="margin-left:4px">${e.user_role}</span>
+        <span class="log-action"> ${e.action}</span>
+        <div class="log-time">${fmtDate(e.created_at)}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ═══════════════════════════════════════════
+// COMMENTS
+// ═══════════════════════════════════════════
+async function loadComments() {
+  const { data } = await db.from('comments').select('*').eq('project_id', currentProjectId).order('created_at', {ascending:true});
+  const list = document.getElementById('comments-list');
+  if (!data || !data.length) { list.innerHTML = '<div style="color:var(--text3);font-size:13px">No comments yet.</div>'; return; }
+  list.innerHTML = data.map(c => `
+    <div style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+        <div class="log-avatar" style="width:24px;height:24px;font-size:10px">${initials(c.user_name)}</div>
+        <strong style="font-size:13px">${c.user_name}</strong>
+        <span style="font-size:11px;color:var(--text3)">${fmtDate(c.created_at)}</span>
+      </div>
+      <div style="font-size:13px;color:var(--text2);padding-left:30px;line-height:1.5">${c.content}</div>
+    </div>
+  `).join('');
+}
+
+async function addComment() {
+  const content = document.getElementById('new-comment').value.trim();
+  if (!content) return;
+  await db.from('comments').insert({ project_id: currentProjectId, user_id: currentUser.id, user_name: currentProfile.full_name, content });
+  document.getElementById('new-comment').value = '';
+  loadComments();
+}
+
+// ═══════════════════════════════════════════
+// PROFESSOR VIEW
+// ═══════════════════════════════════════════
+async function loadProfessorView() {
+  const list = document.getElementById('professor-list');
+  list.innerHTML = '<div class="loading-wrap"><div class="loading-spinner"></div></div>';
+
+  const { data: projects } = await db.from('projects').select('*, project_members(user_id, profiles(full_name, role)), tasks(*)').eq('status','active').order('created_at', {ascending:false});
+
+  if (!projects || !projects.length) { list.innerHTML = '<div style="color:var(--text3);padding:20px">No projects found.</div>'; return; }
+
+  const today = new Date().toISOString().split('T')[0];
+  const overdue = projects.reduce((s, p) => s + (p.tasks||[]).filter(t => t.due_date && t.due_date < today && t.status !== 'done').length, 0);
+  const avg = Math.round(projects.reduce((s,p) => s + (p.overall_progress||0), 0) / projects.length);
+
+  document.getElementById('prof-total').textContent = projects.length;
+  document.getElementById('prof-avg').textContent = avg + '%';
+  document.getElementById('prof-overdue').textContent = overdue;
+
+  list.innerHTML = projects.map(p => {
+    const phases = phasesConfig[p.project_type] || [];
+    const pct = p.overall_progress || 0;
+    const tasks = p.tasks || [];
+    const members = (p.project_members || []).map(m => m.profiles?.full_name).filter(Boolean);
+
+    return `
+    <div class="professor-row" id="prow-${p.id}">
+      <div class="professor-row-header" onclick="toggleProfRow('${p.id}')">
+        <span class="${typeBadgeClass(p.project_type)}">${typeLabel(p.project_type)}</span>
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:14px">${p.name}</div>
+          <div style="font-size:12px;color:var(--text3)">${p.current_phase||''} · ${members.join(', ') || 'No members'}</div>
+        </div>
+        <div style="width:120px">
+          <div style="font-size:11px;color:var(--text3);margin-bottom:3px">${pct}% complete</div>
+          <div class="progress-bar" style="margin-bottom:0"><div class="progress-fill" style="width:${pct}%;background:var(--c-${p.project_type==='value_add'?'val':p.project_type==='home_build'?'hom':p.project_type.slice(0,3)})"></div></div>
+        </div>
+        <span class="expand-icon">▾</span>
+      </div>
+      <div class="professor-row-body">
+        <div style="padding:14px">
+          ${tasks.length ? tasks.map(t => `
+            <div class="task-item">
+              <div class="task-status-dot task-status-${t.status}"></div>
+              <div class="task-title" style="flex:1">${t.title}</div>
+              <span class="priority-badge priority-${t.priority}">${t.priority}</span>
+              <div style="font-size:12px;color:var(--text3)">${t.due_date ? fmtDate(t.due_date) : '—'}</div>
+              <select class="inline-input" style="width:110px;font-size:12px" onchange="updateTaskStatusProfView('${t.id}','${p.id}',this.value)">
+                <option value="not_started" ${t.status==='not_started'?'selected':''}>Not Started</option>
+                <option value="in_progress" ${t.status==='in_progress'?'selected':''}>In Progress</option>
+                <option value="done" ${t.status==='done'?'selected':''}>Done</option>
+              </select>
+            </div>
+          `).join('') : '<div style="color:var(--text3);font-size:13px">No tasks.</div>'}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleProfRow(id) {
+  document.getElementById('prow-' + id).classList.toggle('expanded');
+}
+
+async function updateTaskStatusProfView(taskId, projectId, status) {
+  await db.from('tasks').update({ status, updated_at: new Date().toISOString() }).eq('id', taskId);
+  await logActivity(projectId, `updated task status to "${status}" (professor view)`);
+}
+
+// ═══════════════════════════════════════════
+// ADMIN VIEW
+// ═══════════════════════════════════════════
+async function loadAdminView() {
+  loadAdminUsers();
+  loadInviteCode();
+  loadPhaseConfigsAdmin();
+  loadCustomFields();
+  loadAllActivityLog();
+}
+
+function switchAdminTab(name, el) {
+  document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.admin-panel-content').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('admin-' + name).classList.add('active');
+}
+
+async function loadAdminUsers() {
+  const { data: users } = await db.from('profiles').select('*').order('created_at');
+  const tbody = document.getElementById('admin-users-body');
+  if (!users || !users.length) { tbody.innerHTML = '<tr><td colspan="6">No users.</td></tr>'; return; }
+  tbody.innerHTML = users.map(u => `
+    <tr>
+      <td style="font-weight:500">${u.full_name}</td>
+      <td style="color:var(--text2)">${u.email}</td>
+      <td>
+        <select class="inline-input" style="width:110px;font-size:12px" onchange="updateUserRole('${u.id}',this.value)" ${u.id === currentUser.id ? 'disabled' : ''}>
+          <option value="pending" ${u.role==='pending'?'selected':''}>Pending</option>
+          <option value="student" ${u.role==='student'?'selected':''}>Student</option>
+          <option value="professor" ${u.role==='professor'?'selected':''}>Professor</option>
+          <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+        </select>
+      </td>
+      <td style="color:var(--text3)">${fmtDate(u.created_at)}</td>
+      <td style="color:var(--text3)">${fmtDate(u.last_active)}</td>
+      <td>
+        ${u.id !== currentUser.id ? `<button class="btn btn-sm btn-danger" onclick="deactivateUser('${u.id}','${u.full_name}')">${u.is_active ? 'Deactivate' : 'Deactivated'}</button>` : '<span style="color:var(--text3);font-size:12px">You</span>'}
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function updateUserRole(userId, role) {
+  await db.from('profiles').update({ role }).eq('id', userId);
+  toast('Role updated to ' + role, 'success');
+}
+
+async function deactivateUser(userId, name) {
+  if (!confirm(`Deactivate ${name}?`)) return;
+  await db.from('profiles').update({ is_active: false }).eq('id', userId);
+  toast('User deactivated');
+  loadAdminUsers();
+}
+
+async function loadInviteCode() {
+  const { data } = await db.from('config').select('invite_code').eq('id', 1).single();
+  if (data) document.getElementById('invite-code-input').value = data.invite_code;
+}
+
+async function saveInviteCode() {
+  const code = document.getElementById('invite-code-input').value.trim().toUpperCase();
+  if (!code) { toast('Code cannot be empty.', 'error'); return; }
+  await db.from('config').update({ invite_code: code }).eq('id', 1);
+  toast('Invite code updated: ' + code, 'success');
+}
+
+async function loadPhaseConfigsAdmin() {
+  const container = document.getElementById('phase-configs-panel');
+  const types = ['acquisition','development','value_add','home_build'];
+  container.innerHTML = types.map(type => `
+    <div class="panel">
+      <div class="panel-title">${typeLabel(type)} Phases</div>
+      <textarea id="pc-${type}" rows="4" style="font-family:'DM Mono',monospace;font-size:12px">${(phasesConfig[type]||[]).join('\n')}</textarea>
+      <button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="savePhaseConfig('${type}')">Save Phases</button>
+    </div>
+  `).join('');
+}
+
+async function savePhaseConfig(type) {
+  const text = document.getElementById('pc-' + type).value;
+  const phases = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const { error } = await db.from('phase_configs').update({ phases }).eq('project_type', type);
+  if (error) { toast('Failed to save.', 'error'); return; }
+  phasesConfig[type] = phases;
+  toast('Phases saved for ' + typeLabel(type), 'success');
+}
+
+async function loadCustomFields() {
+  const { data } = await db.from('custom_fields').select('*').order('created_at');
+  const list = document.getElementById('custom-fields-list');
+  if (!data || !data.length) { list.innerHTML = '<div style="color:var(--text3);font-size:13px">No custom fields yet.</div>'; return; }
+  list.innerHTML = data.map(f => `
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+      <span style="flex:1;font-size:13px">${f.field_name}</span>
+      <span style="font-size:11px;color:var(--text3)">${f.field_type}</span>
+      <button class="btn btn-sm" style="color:#E53E3E" onclick="deleteCustomField('${f.id}')">✕</button>
+    </div>
+  `).join('');
+}
+
+async function addCustomField() {
+  const name = document.getElementById('new-field-name').value.trim();
+  const type = document.getElementById('new-field-type').value;
+  if (!name) { toast('Field name required.', 'error'); return; }
+  await db.from('custom_fields').insert({ field_name: name, field_type: type });
+  document.getElementById('new-field-name').value = '';
+  loadCustomFields();
+}
+
+async function deleteCustomField(id) {
+  await db.from('custom_fields').delete().eq('id', id);
+  loadCustomFields();
+}
+
+async function loadAllActivityLog() {
+  const { data } = await db.from('activity_log').select('*, projects(name)').order('created_at', {ascending:false}).limit(200);
+  const container = document.getElementById('all-activity-log');
+  if (!data || !data.length) { container.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:12px">No activity yet.</div>'; return; }
+  container.innerHTML = `<div class="panel">${data.map(e => `
+    <div class="log-entry">
+      <div class="log-avatar">${initials(e.user_name)}</div>
+      <div class="log-body">
+        <span class="log-user">${e.user_name}</span>
+        <span class="role-badge role-${e.user_role}" style="margin-left:4px">${e.user_role}</span>
+        <span style="font-size:12px;color:var(--text3)"> on ${e.projects?.name || 'unknown project'}</span>
+        <span class="log-action"> — ${e.action}</span>
+        <div class="log-time">${fmtDate(e.created_at)}</div>
+      </div>
+    </div>
+  `).join('')}</div>`;
+}
+
+// ═══════════════════════════════════════════
+// AI BAR
+// ═══════════════════════════════════════════
+async function sendAICommand() {
+  const input = document.getElementById('ai-input');
+  const cmd = input.value.trim();
+  if (!cmd) return;
+
+  toast('Processing: "' + cmd.slice(0, 60) + '..."');
+  input.value = '';
+
+  // Parse and execute
+  const result = await parseAndExecuteCommand(cmd);
+  toast(result.message, result.success ? 'success' : 'error');
+  if (result.success && currentProjectId) {
+    await logActivity(currentProjectId, `[AI] ${cmd}`);
+    // Refresh current module
+    const activeModule = document.querySelector('.module-tab.active');
+    if (activeModule) switchModule(activeModule.dataset.module, activeModule);
+  }
+}
+
+async function parseAndExecuteCommand(cmd) {
+  const lower = cmd.toLowerCase();
+
+  // Try to find project name
+  let targetProjectId = currentProjectId;
+  let targetProject = currentProjectData;
+
+  // "assign X to me/[name] by [date]"
+  if (lower.includes('assign') && (lower.includes(' to ') || lower.includes(' by '))) {
+    const toMe = lower.includes(' to me');
+    const assigneeId = toMe ? currentUser.id : null;
+    const assigneeName = toMe ? currentProfile.full_name : 'User';
+
+    // Look for task/item name
+    const assignMatch = cmd.match(/assign\s+(.+?)\s+(?:to|by)/i);
+    const taskName = assignMatch ? assignMatch[1] : '';
+    const dateMatch = cmd.match(/by\s+(\w+\s+\d+|\d+\/\d+\/\d+)/i);
+    const dueDate = dateMatch ? new Date(dateMatch[1]).toISOString().split('T')[0] : null;
+
+    if (taskName && targetProjectId) {
+      // Check checklist
+      const { data: items } = await db.from('checklist_items').select('*').eq('project_id', targetProjectId).ilike('item_text', `%${taskName}%`);
+      if (items?.length) {
+        await db.from('checklist_items').update({ assignee_id: assigneeId, due_date: dueDate }).eq('id', items[0].id);
+        return { success: true, message: `Assigned "${items[0].item_text}" to ${assigneeName}${dueDate ? ' by ' + dueDate : ''}` };
+      }
+      // Check tasks
+      const { data: tasks } = await db.from('tasks').select('*').eq('project_id', targetProjectId).ilike('title', `%${taskName}%`);
+      if (tasks?.length) {
+        await db.from('tasks').update({ assignee_id: assigneeId, due_date: dueDate }).eq('id', tasks[0].id);
+        return { success: true, message: `Assigned task "${tasks[0].title}" to ${assigneeName}` };
+      }
+    }
+    return { success: false, message: 'Could not find the item to assign.' };
+  }
+
+  // "mark [item] done/complete"
+  if (lower.includes('mark') && (lower.includes('done') || lower.includes('complete') || lower.includes('checked'))) {
+    const markMatch = cmd.match(/mark\s+(?:the\s+)?(.+?)\s+(?:as\s+)?(?:done|complete|checked)/i);
+    const itemName = markMatch ? markMatch[1] : '';
+    if (itemName && targetProjectId) {
+      const { data: items } = await db.from('checklist_items').select('*').eq('project_id', targetProjectId).ilike('item_text', `%${itemName}%`);
+      if (items?.length) {
+        await db.from('checklist_items').update({ is_checked: true, checked_by: currentUser.id, checked_at: new Date().toISOString() }).eq('id', items[0].id);
+        return { success: true, message: `Marked "${items[0].item_text}" as done` };
+      }
+      const { data: tasks } = await db.from('tasks').select('*').eq('project_id', targetProjectId).ilike('title', `%${itemName}%`);
+      if (tasks?.length) {
+        await db.from('tasks').update({ status: 'done', updated_at: new Date().toISOString() }).eq('id', tasks[0].id);
+        return { success: true, message: `Task "${tasks[0].title}" marked as done` };
+      }
+    }
+    return { success: false, message: 'Could not find that item.' };
+  }
+
+  // "move [project] to [phase]"
+  if (lower.includes('move') && lower.includes('phase') || lower.includes('advance') && lower.includes('phase')) {
+    if (targetProjectId && currentProjectData) {
+      await advancePhase();
+      return { success: true, message: `Phase advanced to ${currentProjectData.current_phase}` };
+    }
+  }
+
+  // "add task [name]"
+  if (lower.startsWith('add task') || lower.startsWith('create task')) {
+    const taskName = cmd.replace(/^(add|create)\s+task\s*/i, '').trim();
+    if (taskName && targetProjectId) {
+      await db.from('tasks').insert({ project_id: targetProjectId, title: taskName, assignee_id: currentUser.id, status: 'not_started', priority: 'medium', created_by: currentUser.id });
+      return { success: true, message: `Task created: "${taskName}"` };
+    }
+  }
+
+  return { success: false, message: 'Could not understand that command. Try: "assign [item] to me", "mark [item] done", "add task [name]"' };
+}
+
+// Voice input
+function toggleMic() {
+  if (!isListening) {
+    startListening();
+  } else {
+    stopListening();
+  }
+}
+
+function startListening() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    toast('Voice input not supported in this browser.', 'error'); return;
+  }
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SpeechRecognition();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.lang = 'en-US';
+  recognition.onresult = e => {
+    document.getElementById('ai-input').value = e.results[0][0].transcript;
+    stopListening();
+  };
+  recognition.onerror = () => stopListening();
+  recognition.onend = () => stopListening();
+  recognition.start();
+  isListening = true;
+  document.getElementById('mic-btn').classList.add('listening');
+}
+
+function stopListening() {
+  if (recognition) recognition.stop();
+  isListening = false;
+  document.getElementById('mic-btn').classList.remove('listening');
+}
+
+// ═══════════════════════════════════════════
+// START
+// ═══════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', init);
+
+// Also handle enter key on auth forms
+document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+document.getElementById('signup-code').addEventListener('keydown', e => { if (e.key === 'Enter') doSignup(); });
+</script>
+</body>
+</html>
